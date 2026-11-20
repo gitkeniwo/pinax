@@ -16,9 +16,9 @@ Users install the app with `brew install --cask gitkeniwo/pinax/pinax` and the C
 
 ## Workflows
 
-- **CI** runs `swift test --skip FocusSerial` on every pull request and every push to `main`. Pull requests also build the app unsigned.
+- **CI** runs the core and CLI tests on every pull request and every push to `main`. The UI tests run serially in a separate `ui-tests` job that never blocks, since their timing waits are not reliable on hosted runners. Pull requests also build the app unsigned.
 - **Nightly**: after the tests pass on `main`, CI builds the app and CLI, moves the `nightly` tag to that commit, and replaces the assets of the `nightly` prerelease (`Pinax-nightly.zip`, `pinax-cli-nightly.zip`, `SHA256SUMS`).
-- **Release**: pushing a `vX.Y.Z` tag checks the version and changelog, runs the tests, builds and signs both products, creates the GitHub release with the changelog section as notes, then renders the cask and formula and pushes them to the tap.
+- **Release**: pushing a `vX.Y.Z` tag checks the version and changelog, runs the core and CLI tests, builds and signs both products, creates the GitHub release with the changelog section as notes, then renders the cask and formula and pushes them to the tap.
 
 Both builds are universal (arm64 and x86_64) and use the dependency versions in `Package.resolved`.
 
@@ -41,8 +41,11 @@ The release job runs in the `release` environment, so a required reviewer can be
 1. **Bump the version** in one commit on `main`:
    - set `PinaxVersion.current` in `Sources/CatalogCore/CatalogCore.swift`, which is what `pinax --version` prints;
    - in `CHANGELOG.md`, turn the Unreleased entries into a `## <version> — <YYYY-MM-DD>` section (see "Changelog" below).
-2. **Run the focus tests locally**, since CI skips them:
+2. **Run the UI and focus tests locally**, since the release job runs only the core and CLI tests:
 
+   ```bash
+   swift test --skip FocusSerial
+   ```
    ```bash
    swift test --no-parallel --filter FocusSerial
    ```

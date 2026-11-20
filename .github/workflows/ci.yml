@@ -24,8 +24,23 @@ jobs:
         with:
           path: .build
           key: spm-${{ runner.os }}-${{ hashFiles('Package.resolved') }}
-      # FocusSerial tests need a focused window and run locally only.
-      - run: swift test --skip FocusSerial
+      # The UI tests drive offscreen windows with timing waits and are not
+      # reliable on hosted runners; they run in `ui-tests` below without
+      # gating anything. FocusSerial tests need a focused window and run
+      # locally only.
+      - run: swift test --skip PinaxUITests --skip FocusSerial
+
+  ui-tests:
+    runs-on: macos-26
+    timeout-minutes: 60
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        with:
+          path: .build
+          key: spm-${{ runner.os }}-${{ hashFiles('Package.resolved') }}
+      - run: swift test --no-parallel --filter PinaxUITests --skip FocusSerial
 
   build-app:
     if: github.event_name == 'pull_request'

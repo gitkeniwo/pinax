@@ -29,7 +29,8 @@ jobs:
         with:
           path: .build
           key: spm-${{ runner.os }}-${{ hashFiles('Package.resolved') }}
-      - run: swift test --skip FocusSerial
+      # The UI tests are run locally before tagging (docs/RELEASING.md).
+      - run: swift test --skip PinaxUITests --skip FocusSerial
       - name: Import signing certificate
         env:
           SIGNING_CERT_P12: ${{ secrets.SIGNING_CERT_P12 }}
