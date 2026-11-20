@@ -1,0 +1,23 @@
+.DS_Store
+.build/
+.build-xcode/
+.swiftpm/
+xcuserdata/
+*.xcuserstate
+*.sqlite*
+*.log
+scratch/
+data/
+target/
+
+# Claude Code worktrees and local settings
+.claude/
+
+# Private planning notes (symlinks into a separate private repository)
+/docs/plans
+/docs/design
+/docs/archive
+/REVIEW-*.md
+
+# Per-developer Xcode settings (signing team)
+/PinaxApp/Local.xcconfig

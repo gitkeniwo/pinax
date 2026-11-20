@@ -1,0 +1,90 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - run: xcodebuild -version && swift --version
+      - uses: actions/cache@v4
+        with:
+          path: .build
+          key: spm-${{ runner.os }}-${{ hashFiles('Package.resolved') }}
+      # FocusSerial tests need a focused window and run locally only.
+      - run: swift test --skip FocusSerial
+
+  build-app:
+    if: github.event_name == 'pull_request'
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          xcodebuild -quiet -project PinaxApp/PinaxApp.xcodeproj -scheme PinaxApp \
+            -configuration Release -destination "generic/platform=macOS" \
+            -derivedDataPath .build/xcode -onlyUsePackageVersionsFromResolvedFile \
+            CODE_SIGNING_ALLOWED=NO build
+
+  # Rolling prerelease: the `nightly` tag and release always point at the
+  # latest main commit that passed the tests.
+  nightly:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: test
+    runs-on: macos-26
+    timeout-minutes: 60
+    permissions:
+      contents: write
+    concurrency:
+      group: nightly
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Import signing certificate
+        env:
+          SIGNING_CERT_P12: ${{ secrets.SIGNING_CERT_P12 }}
+          SIGNING_CERT_PASSWORD: ${{ secrets.SIGNING_CERT_PASSWORD }}
+        run: Scripts/ci-import-cert.sh
+      - name: Build
+        run: |
+          VERSION="$(sed -n 's/.*static let current = "\(.*\)".*/\1/p' Sources/CatalogCore/CatalogCore.swift)"
+          Scripts/build-dist.sh "$VERSION" nightly "$RUNNER_TEMP/dist"
+      - name: Publish the nightly prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          DIST="$RUNNER_TEMP/dist"
+          SHORT="$(git rev-parse --short HEAD)"
+          cat > "$DIST/NOTES.md" <<NOTES
+          Automated build of \`main\` at ${SHORT}, $(date -u '+%Y-%m-%d %H:%M UTC').
+
+          Untested beyond CI and not notarized. For stable versions use Homebrew:
+          \`brew install --cask gitkeniwo/pinax/pinax\`.
+          NOTES
+          git tag -f nightly
+          git push -f origin refs/tags/nightly
+          if gh release view nightly >/dev/null 2>&1; then
+            gh release edit nightly --prerelease --title "Pinax nightly" --notes-file "$DIST/NOTES.md"
+            gh release upload nightly --clobber "$DIST/Pinax-nightly.zip" "$DIST/pinax-cli-nightly.zip" "$DIST/SHA256SUMS"
+          else
+            gh release create nightly --prerelease --title "Pinax nightly" --notes-file "$DIST/NOTES.md" \
+              "$DIST/Pinax-nightly.zip" "$DIST/pinax-cli-nightly.zip" "$DIST/SHA256SUMS"
+          fi
+      - name: Remove the signing keychain
+        if: always()
+        run: '[ -z "${PINAX_SIGN_KEYCHAIN:-}" ] || security delete-keychain "$PINAX_SIGN_KEYCHAIN"'

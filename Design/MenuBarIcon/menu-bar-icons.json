@@ -1,0 +1,12 @@
+{
+  "_comment": "Selectable menu bar icons, in display order. 'glyph' is the key in glyphs.js (canvas board F number in 'board'); 'default' is the one a fresh install shows. Scripts/make-menu-bar-icons.sh renders each into the template image set MenuBarIcon-<id>.",
+  "icons": [
+    {"id": "tablet", "name": "Tablet", "glyph": "filled4", "board": "F8", "default": true},
+    {"id": "tablet-outline", "name": "Tablet Outline", "glyph": "outline4", "board": "F7"},
+    {"id": "tablet-upload", "name": "Tablet Upload", "glyph": "upload", "board": "F5"},
+    {"id": "aten", "name": "Aten", "glyph": "aten4", "board": "F9"},
+    {"id": "aten-outline", "name": "Aten Outline", "glyph": "aten4o", "board": "F11"},
+    {"id": "aten-fan", "name": "Aten Fan", "glyph": "aten", "board": "F3"},
+    {"id": "horizon-upload", "name": "Horizon Upload", "glyph": "akhetUp", "board": "F10"}
+  ]
+}

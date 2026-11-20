@@ -1,0 +1,9 @@
+// Code signing for local builds. Release and nightly builds are signed by CI.
+//
+// To build and run from Xcode with your own Apple team, create
+// PinaxApp/Local.xcconfig (gitignored) containing:
+//
+//     DEVELOPMENT_TEAM = <your team ID>
+
+DEVELOPMENT_TEAM =
+#include? "Local.xcconfig"

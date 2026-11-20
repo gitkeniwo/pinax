@@ -1,0 +1,25 @@
+cask "pinax" do
+  version "@VERSION@"
+  sha256 "@APP_SHA256@"
+
+  url "@BASE_URL@/v#{version}/Pinax-#{version}.zip"
+  name "Pinax"
+  desc "Self-hosted image catalog"
+  homepage "https://github.com/gitkeniwo/pinax"
+
+  depends_on macos: ">= :sonoma"
+
+  app "Pinax.app"
+
+  caveats <<~EOS
+    Pinax is not notarized: it has no Apple Developer ID. macOS blocks the
+    first open of every new version. To open it:
+
+      1. Open Pinax once and dismiss the warning.
+      2. Open System Settings › Privacy & Security.
+      3. Click "Open Anyway" next to the Pinax message, then confirm.
+
+    The first time Pinax reads a backend credential, Keychain asks for
+    access; click "Always Allow". Updates keep that answer.
+  EOS
+end

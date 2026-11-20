@@ -1,0 +1,17 @@
+class Pinax < Formula
+  desc "Self-hosted image catalog (command-line tool)"
+  homepage "https://github.com/gitkeniwo/pinax"
+  url "@BASE_URL@/v@VERSION@/pinax-cli-@VERSION@.zip"
+  version "@VERSION@"
+  sha256 "@CLI_SHA256@"
+
+  depends_on macos: :sonoma
+
+  def install
+    bin.install "pinax"
+  end
+
+  test do
+    assert_match "USAGE", shell_output("#{bin}/pinax --help")
+  end
+end

@@ -1,0 +1,63 @@
+{
+  "gallery": [
+    {
+      "fileName": "screenshot-one.png",
+      "width": 800,
+      "height": 600,
+      "url": "https://img.example.com/202511/screenshot-one.png",
+      "imgUrl": "https://img.example.com/202511/screenshot-one.png",
+      "type": "aws-s3",
+      "extname": "png",
+      "shortUrl": null,
+      "id": "one",
+      "createdAt": 1762987109000,
+      "updatedAt": 1762987109000,
+      "config": {}
+    },
+    {
+      "fileName": "photo-two.jpg",
+      "width": 1024,
+      "height": 768,
+      "url": "https://img.example.com/202511/photo-two.jpg",
+      "imgUrl": "https://img.example.com/202511/photo-two.jpg",
+      "type": "aws-s3",
+      "extname": "jpg",
+      "shortUrl": null,
+      "id": "two",
+      "createdAt": 1763073509000,
+      "updatedAt": 1763073509000,
+      "config": {}
+    },
+    {
+      "fileName": "wide-three.png",
+      "width": 1920,
+      "height": 1080,
+      "url": "https://img.example.com/202512/wide-three.png",
+      "imgUrl": "https://img.example.com/202512/wide-three.png",
+      "type": "aws-s3",
+      "extname": "png",
+      "shortUrl": null,
+      "id": "three",
+      "createdAt": 1765665509000,
+      "updatedAt": 1765665509000,
+      "config": {}
+    },
+    {
+      "fileName": "screenshot-one.png",
+      "width": 800,
+      "height": 600,
+      "url": "https://img.example.com/202511/screenshot-one.png",
+      "imgUrl": "https://img.example.com/202511/screenshot-one.png",
+      "type": "aws-s3",
+      "extname": "png",
+      "shortUrl": null,
+      "id": "one-duplicate",
+      "createdAt": 1762987109980,
+      "updatedAt": 1762987109980,
+      "config": {}
+    }
+  ],
+  "__gallery_KEY__": {
+    "unrelated": "picgo bookkeeping"
+  }
+}

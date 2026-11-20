@@ -1,0 +1,12 @@
+{
+  "_comment": "Selectable Dock icons, in display order. 'bundle' means the app's own icon (AppIcon, from pinax.json); every other entry is rendered by Scripts/make-dock-icons.sh from variants/<id>.json into the image set DockIcon-<id>.",
+  "icons": [
+    {"id": "ivory-linen", "name": "Ivory Linen"},
+    {"id": "museum-spotlight", "name": "Museum Spotlight"},
+    {"id": "sage-linen", "name": "Sage Linen"},
+    {"id": "ivory-glyph", "name": "Ivory Glyph", "bundle": true},
+    {"id": "ivory-glyph-spotlight", "name": "Ivory Glyph Spotlight"},
+    {"id": "limestone", "name": "Limestone"},
+    {"id": "limestone-spotlight", "name": "Limestone Spotlight"}
+  ]
+}
