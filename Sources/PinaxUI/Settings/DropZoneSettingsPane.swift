@@ -54,6 +54,17 @@ struct DropZoneSettingsPane: View {
   }
 
   var body: some View {
+    HStack(alignment: .top, spacing: DesignMetrics.spacing.none) {
+      form
+        .frame(width: Metrics.contentWidth)
+      // Beside the form and still while it scrolls; level with the switch.
+      DropZonePreviewColumn(preferences: preferences, projects: projects)
+        .padding(.top, Metrics.pageTopInset)
+        .padding(.trailing, Metrics.previewTrailingInset)
+    }
+  }
+
+  private var form: some View {
     SettingsPage {
       SettingsGroup {
         HStack(spacing: Metrics.rowSpacing) {

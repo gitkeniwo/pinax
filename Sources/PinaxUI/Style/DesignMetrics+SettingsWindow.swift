@@ -17,8 +17,10 @@ extension DesignMetrics.settings {
   /// The window's width for a page: 568 or 748 beside the sidebar, at
   /// the sidebar's own width; the user drags the sidebar between 160 and
   /// 320 and the window widens or narrows with it (738 / 918 at the default).
+  /// Drop Zone adds its preview column and the margin after it (1146).
   public static func windowWidth(for tab: SettingsTab, sidebar: CGFloat = sidebarWidth) -> CGFloat {
     sidebar + (tab.hasListColumn ? listColumnWidth + detailWidth : contentWidth)
+      + (tab.hasPreviewColumn ? previewColumnWidth + previewTrailingInset : 0)
   }
   public static let sidebarMinWidth: CGFloat = 160
   public static let sidebarMaxWidth: CGFloat = 320

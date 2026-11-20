@@ -68,6 +68,21 @@ public final class DropZoneModel: ObservableObject {
       self.catalogItem = nil
     }
 
+    /// A card made up whole, phase and all: the settings preview's samples.
+    init(
+      filename: String, fileURL: URL, phase: Phase, thumbnail: CGImage?,
+      landedAt: Date? = nil, projectSlug: String?
+    ) {
+      self.id = UUID()
+      self.fileURL = fileURL
+      self.filename = filename
+      self.phase = phase
+      self.thumbnail = thumbnail
+      self.landedAt = landedAt
+      self.projectSlug = projectSlug
+      self.catalogItem = nil
+    }
+
     init(catalogItem item: CatalogAssetItem, projectSlug: String?) {
       let asset = item.asset
       let filename = asset.originalFilename ?? (asset.key as NSString).lastPathComponent
@@ -145,6 +160,15 @@ public final class DropZoneModel: ObservableObject {
   @Published public var selectedProjectSlug: String? {
     didSet {
       guard oldValue != selectedProjectSlug else { return }
+      // A preview's picker is for show: only its seed moves it.
+      if isPreview {
+        if !isSeedingPreview {
+          isSeedingPreview = true
+          selectedProjectSlug = oldValue
+          isSeedingPreview = false
+        }
+        return
+      }
       onSelectedProjectChange?(selectedProjectSlug)
     }
   }
@@ -183,11 +207,30 @@ public final class DropZoneModel: ObservableObject {
 
   private var cancelCountdown: (@MainActor () -> Void)?
 
-  public init(
+  /// A settings preview's model (`preview(...)`): everything that would
+  /// upload, copy, move, open Quick Look or change the panel does nothing.
+  /// The preview's own service and copier are the first line; this is the
+  /// second.
+  let isPreview: Bool
+  /// Set while `seedPreview` writes the picker, the one write a preview
+  /// takes.
+  var isSeedingPreview = false
+
+  public convenience init(
     service: any DropZoneService,
     thumbnails: ThumbnailCache,
     quickLook: QuickLookController? = nil
   ) {
+    self.init(service: service, thumbnails: thumbnails, quickLook: quickLook, isPreview: false)
+  }
+
+  init(
+    service: any DropZoneService,
+    thumbnails: ThumbnailCache,
+    quickLook: QuickLookController?,
+    isPreview: Bool
+  ) {
+    self.isPreview = isPreview
     self.service = service
     self.thumbnails = thumbnails
     self.quickLook = quickLook ?? QuickLookController(thumbnails: thumbnails)
@@ -246,6 +289,7 @@ public final class DropZoneModel: ObservableObject {
   }
 
   public func drop(fileURLs: [URL]) {
+    guard !isPreview else { return }
     isDragActive = false
     draggedFileURLs = []
     guard !fileURLs.isEmpty else {
@@ -270,6 +314,7 @@ public final class DropZoneModel: ObservableObject {
 
   /// ×: hide now and unpin. The cards stay for Show Drop Zone.
   public func dismiss() {
+    guard !isPreview else { return }
     isDragActive = false
     draggedFileURLs = []
     isShownOnDemand = false
@@ -277,6 +322,7 @@ public final class DropZoneModel: ObservableObject {
   }
 
   public func togglePin() {
+    guard !isPreview else { return }
     isPinned.toggle()
     restartCountdown()
   }
@@ -371,6 +417,7 @@ public final class DropZoneModel: ObservableObject {
   }
 
   public func retry(_ id: UUID) {
+    guard !isPreview else { return }
     guard let index = cards.firstIndex(where: { $0.id == id }),
       case .failed = cards[index].phase
     else { return }
@@ -383,6 +430,7 @@ public final class DropZoneModel: ObservableObject {
   /// Drop-zone cards already point at the local source file, so this bypasses
   /// the original-image downloader and its cache entirely.
   public func quickLook(_ id: UUID) {
+    guard !isPreview else { return }
     guard let card = cards.first(where: { $0.id == id }) else { return }
     if let item = card.catalogItem {
       quickLook.toggleRemote([item], at: 0)
@@ -395,6 +443,7 @@ public final class DropZoneModel: ObservableObject {
   /// released and the new one added; a refusal (e.g. the project vanished)
   /// reverts the picker and is shown on the card, never swallowed.
   public func changeProject(_ id: UUID, to slug: String?) {
+    guard !isPreview else { return }
     guard let index = cards.firstIndex(where: { $0.id == id }),
       case .done(let outcome) = cards[index].phase,
       cards[index].projectSlug != slug
@@ -599,11 +648,13 @@ public final class DropZoneModel: ObservableObject {
   /// The card's Copy URL / Copy Markdown buttons. Through the same copier
   /// seam as the automatic copy, so no test writes the user's pasteboard.
   public func copyURL(_ id: UUID) {
+    guard !isPreview else { return }
     guard let card = cards.first(where: { $0.id == id }), case .done = card.phase else { return }
     copy(url(for: card))
   }
 
   public func copyMarkdown(_ id: UUID) {
+    guard !isPreview else { return }
     guard let card = cards.first(where: { $0.id == id }), case .done = card.phase else { return }
     copy(markdown(for: card))
   }
@@ -619,5 +670,22 @@ public final class DropZoneModel: ObservableObject {
   public func url(for card: UploadCard) -> String {
     guard case .done(let outcome) = card.phase else { return "" }
     return outcome.url
+  }
+
+  // MARK: - Settings preview
+
+  /// What the preview shows, written straight in: the cards, the drag's
+  /// files, the projects and the picker. A preview's state changes only
+  /// here.
+  func seedPreview(
+    cards: [UploadCard], draggedFileURLs: [URL], projects: [Project], selectedProjectSlug: String?
+  ) {
+    precondition(isPreview, "seedPreview is for a preview's model only")
+    self.projects = projects
+    self.cards = cards
+    self.draggedFileURLs = draggedFileURLs
+    isSeedingPreview = true
+    self.selectedProjectSlug = selectedProjectSlug
+    isSeedingPreview = false
   }
 }

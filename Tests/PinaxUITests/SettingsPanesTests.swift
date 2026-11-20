@@ -67,7 +67,7 @@ import Testing
     #expect(!settings.contains("Enable drop zone"))
   }
 
-  @Test("General, Appearance, Drop Zone and Gallery fit the 568 pt page without scrolling sideways")
+  @Test("General, Appearance, Drop Zone (its form, beside the preview) and Gallery fit the 568 pt page without scrolling sideways")
   func panesFitTheWidth() async throws {
     let (app, directory) = try await makeApp()
     defer { try? FileManager.default.removeItem(at: directory) }
@@ -78,17 +78,20 @@ import Testing
       ("Drop Zone", AnyView(DropZoneSettingsPane(preferences: preferences))),
       ("Gallery", AnyView(GallerySettingsPane(preferences: preferences))),
     ]
-    #expect(DesignMetrics.settings.contentWidth == 568)
+    typealias m = DesignMetrics.settings
+    #expect(m.contentWidth == 568)
     for (name, pane) in panes {
+      // Drop Zone's form is the same 568; its preview column sits beside it.
+      let width = m.contentWidth + (name == "Drop Zone" ? m.previewColumnWidth + m.previewTrailingInset : 0)
       let host = NSHostingView(rootView: pane)
-      host.frame = NSRect(x: 0, y: 0, width: DesignMetrics.settings.contentWidth, height: 800)
+      host.frame = NSRect(x: 0, y: 0, width: width, height: 800)
       host.layoutSubtreeIfNeeded()
-      #expect(host.fittingSize.width <= DesignMetrics.settings.contentWidth, "\(name): \(host.fittingSize)")
+      #expect(host.fittingSize.width <= width, "\(name): \(host.fittingSize)")
       #expect(host.fittingSize.width > 0, "\(name)")
     }
   }
 
-  @Test("The Settings window is the sidebar plus the page (content 568, or list 210 + detail 538), and builds only the chosen page")
+  @Test("The Settings window is the sidebar plus the page (content 568, or list 210 + detail 538, Drop Zone plus its preview column), and builds only the chosen page")
   func settingsWindowWidthFollowsThePage() async throws {
     let (app, directory) = try await makeApp()
     defer { try? FileManager.default.removeItem(at: directory) }
@@ -106,6 +109,7 @@ import Testing
       // The settings scene the app installs (`Settings { PinaxSettingsView(...) }`).
       let settings = PinaxSettingsView(preferences: app.preferences, app: app)
       let width = m.sidebarWidth + (tab == .projects || tab == .backends ? m.listColumnWidth + m.detailWidth : m.contentWidth)
+        + (tab == .dropZone ? m.previewColumnWidth + m.previewTrailingInset : 0)
       #expect(NSHostingView(rootView: settings).fittingSize.width == width, "\(tab)")
       for (other, name) in panes {
         #expect((firstView(in: settings.body, typePrefix: name) != nil) == (other == tab), "\(tab): \(name)")
@@ -371,8 +375,12 @@ import Testing
   /// a clip view it sits in — a row cut off, or a document wider than its
   /// clip view (sideways scrolling). Frames are compared, so a row the form
   /// lays out wider than the page is caught even though its scroll view
-  /// never grows a scroller.
-  private func clippedViews(in host: NSView, width: CGFloat) -> [String] {
+  /// never grows a scroller. Right of `formWidth` (Drop Zone's preview
+  /// column) only the page's sides count: the real panel drawn there clips
+  /// its own cards in its own list, as it does on screen.
+  private func clippedViews(
+    in host: NSView, width: CGFloat, formWidth: CGFloat = .infinity
+  ) -> [String] {
     var found: [String] = []
     // The page's width, not the host's: a hosting view grows to fit.
     let page = NSRect(x: 0, y: host.bounds.minY, width: width, height: host.bounds.height)
@@ -380,6 +388,7 @@ import Testing
     while let (view, visible) = stack.popLast() {
       if view.isHidden || view is NSScroller { continue }
       let frame = view.convert(view.bounds, to: host)
+      let visible = frame.minX >= formWidth ? page : visible
       if frame.width > 0, frame.height > 0,
         frame.minX < visible.minX - 0.5 || frame.maxX > visible.maxX + 0.5
       {
@@ -407,7 +416,7 @@ import Testing
       let settings = PinaxSettingsView(preferences: app.preferences, app: app)
       // The width is the app's own frame, measured, not the constant.
       let pageWidth = NSHostingView(rootView: settings).fittingSize.width - m.sidebarWidth
-      #expect(pageWidth == (tab.hasListColumn ? 748 : 568), "\(name)")
+      #expect(pageWidth == (tab.hasListColumn ? 748 : tab.hasPreviewColumn ? 976 : 568), "\(name)")
       let pane = try #require(firstView(in: settings.body, typePrefix: name) as? any View, "\(name)")
       let host = NSHostingView(
         rootView: AnyView(pane).environment(\.settingsDefaults, islandTestDefaults()))
@@ -446,7 +455,7 @@ import Testing
             && values.contains(details.bucket), "\(values)")
       }
 
-      let clipped = clippedViews(in: host, width: pageWidth)
+      let clipped = clippedViews(in: host, width: pageWidth, formWidth: m.contentWidth)
       #expect(clipped.isEmpty, "\(name): \(clipped.count) views, first \(clipped.prefix(3))")
     }
   }
