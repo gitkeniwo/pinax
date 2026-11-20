@@ -6,6 +6,8 @@ Entries marked **Upgrade note** need action before or after upgrading.
 
 ## Unreleased
 
+## 0.3.4 — 2026-11-20
+
 ### Changed
 - Pinax is open source under the GLWT Public License, and releases are downloaded from this repository's Releases page.
 - The app and the CLI are signed with a stable self-signed certificate, so Keychain keeps "Always Allow" for backend credentials across updates. Keychain asks once more on the first update to a signed version.
