@@ -186,6 +186,63 @@ import Testing
     #expect(!model.contains("var badge"))
   }
 
+  // MARK: - The Library page at the home page's height
+
+  /// Everything the Library page can show: a storage bar and all three
+  /// Needs attention rows, taller than the home page.
+  static func fullLibrary() -> MenuBarLibrary {
+    MenuBarLibrary(
+      stats: stats(
+        orphans: 12,
+        kinds: [
+          CatalogStats.Share(name: "image/png", total: Total(count: 3, bytes: 3_000)),
+          CatalogStats.Share(name: "image/jpeg", total: Total(count: 2, bytes: 2_000)),
+        ],
+        projects: [project("blog", lastScanAt: nil)]),
+      failedUploads: 2, scanTargets: ["blog"], now: now, calendar: utc)
+  }
+
+  @Test("Needs attention's three rows under the shortest home page: the footer stays in the panel, the middle scrolls")
+  func fullPageScrollsInShortPanel() async throws {
+    let (app, _, directory) = try await makeApp()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    #expect(app.recentUploads.isEmpty)
+    let full = Self.fullLibrary()
+    #expect(full.attention.count == 3)
+    #expect(!full.segments(app.preferences.menuBarStorageSplit).isEmpty)
+    let hosted = HostedMenuBarPanel(app: app, library: full)
+    defer { hosted.close() }
+    await hosted.settle()
+    let height = hosted.height
+    await hosted.turn(to: .library)
+    #expect(hosted.height == height)
+    let button = try #require(hosted.overviewButton)
+    #expect(hosted.frameInPanel(button).maxY <= height)
+    let scroll = try #require(hosted.scrollView)
+    let document = try #require(scroll.documentView)
+    #expect(document.frame.height > scroll.contentView.bounds.height)
+  }
+
+  @Test("A short Library page keeps its footer at the bottom, level with the home page's Quit Pinax row")
+  func shortPageFooterAtBottom() async throws {
+    let (app, _, directory) = try await makeApp()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let short = MenuBarLibrary(
+      stats: Self.stats(), failedUploads: 0, scanTargets: [], now: Self.now, calendar: Self.utc)
+    #expect(short.attention.isEmpty)
+    let hosted = HostedMenuBarPanel(app: app, library: short)
+    defer { hosted.close() }
+    await hosted.settle()
+    // Quit Pinax is the home page's last row, inside the panel's inset.
+    let quitBottom = hosted.height - DesignMetrics.menuBarLibrary.panelPadding
+    await hosted.turn(to: .library)
+    let button = try #require(hosted.overviewButton)
+    #expect(abs(hosted.frameInPanel(button).maxY - quitBottom) <= 1)
+    let scroll = try #require(hosted.scrollView)
+    let document = try #require(scroll.documentView)
+    #expect(document.frame.height <= scroll.contentView.bounds.height)
+  }
+
   // MARK: - Chart units
 
   /// Uploads on either side of a week, month and year boundary; no sum

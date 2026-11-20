@@ -1,6 +1,7 @@
 import AppKit
 import CatalogCore
 import Foundation
+import SwiftUI
 @testable import PinaxUI
 import Testing
 
@@ -168,4 +169,99 @@ import Testing
     #expect(line(visible: false) == "Uploading 2 of 5")
     #expect(line(visible: true) == nil)
   }
+
+  // MARK: - The page turn keeps the panel's height
+
+  @Test("Turning to a Library page taller than the home page and back, the panel's height reads the same three times")
+  func turnKeepsHeight() async throws {
+    let (app, directory) = try await makeApp()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let hosted = HostedMenuBarPanel(app: app, library: MenuBarLibraryTests.fullLibrary())
+    defer { hosted.close() }
+    await hosted.settle()
+    let home = hosted.height
+    #expect(home > 0)
+    await hosted.turn(to: .library)
+    #expect(hosted.overviewButton != nil)
+    let library = hosted.height
+    await hosted.turn(to: .home)
+    let back = hosted.height
+    #expect(library == home)
+    #expect(back == home)
+  }
+}
+
+/// The real panel in an offscreen window that is never shown or made key
+/// (so it reads no clipboard and refreshes nothing), its page turned
+/// through the pager it reads, as the card and Back turn it.
+@MainActor
+struct HostedMenuBarPanel {
+  let pager: MenuBarPager
+  let host: NSHostingView<PinaxMenuBarContent>
+  private let window: NSWindow
+
+  init(app: PinaxAppModel, library: MenuBarLibrary? = nil) {
+    let pager = MenuBarPager()
+    self.pager = pager
+    host = NSHostingView(
+      rootView: PinaxMenuBarContent(app: app, pager: pager, library: library))
+    window = NSWindow(
+      contentRect: NSRect(x: -4000, y: -4000, width: PinaxMenuBarContent.width, height: 400),
+      styleMask: [.borderless], backing: .buffered, defer: false)
+    window.isReleasedWhenClosed = false
+    window.contentView = host
+  }
+
+  /// The panel's height: what the window would take.
+  var height: CGFloat {
+    host.layoutSubtreeIfNeeded()
+    return host.fittingSize.height
+  }
+
+  /// Lets the panel measure itself and lay out again.
+  func settle() async {
+    for _ in 0..<25 {
+      host.layoutSubtreeIfNeeded()
+      try? await Task.sleep(nanoseconds: 20_000_000)
+    }
+  }
+
+  func turn(to page: PinaxMenuBarContent.Page) async {
+    pager.page = page
+    await settle()
+  }
+
+  private var views: [NSView] {
+    var found: [NSView] = []
+    var stack: [NSView] = [host]
+    while let view = stack.popLast() {
+      found.append(view)
+      stack.append(contentsOf: view.subviews)
+    }
+    return found
+  }
+
+  /// The Library page's middle.
+  var scrollView: NSScrollView? { views.lazy.compactMap { $0 as? NSScrollView }.first }
+
+  /// The Library page footer's Open Overview ↗: the one button AppKit
+  /// draws outside the scrolling middle (a link button; the header's and
+  /// the home page's are plain SwiftUI buttons). Its title is SwiftUI's to
+  /// draw, so it is found by being the only one.
+  var overviewButton: NSButton? {
+    let middle = scrollView
+    let buttons = views.compactMap { $0 as? NSButton }.filter { button in
+      middle.map { !button.isDescendant(of: $0) } ?? true
+    }
+    return buttons.count == 1 ? buttons[0] : nil
+  }
+
+  /// A view's frame in the panel, top-left origin.
+  func frameInPanel(_ view: NSView) -> CGRect {
+    let frame = view.convert(view.bounds, to: host)
+    return host.isFlipped
+      ? frame : CGRect(x: frame.minX, y: host.bounds.height - frame.maxY, width: frame.width, height: frame.height)
+  }
+
+  func close() { window.close() }
 }
