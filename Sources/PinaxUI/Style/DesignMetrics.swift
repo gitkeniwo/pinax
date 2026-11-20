@@ -341,16 +341,30 @@ public enum DesignMetrics {
     public static let pageBarSpacing: CGFloat = 4
     /// The cards' corner, as a Control Center module's (continuous).
     public static let cardRadius: CGFloat = 14
-    /// The card's open / close (a Control Center module opening): the
-    /// platter's spring; the home page shrinking away fast and settling
-    /// back late; with Reduce Motion, a plain cross-fade.
-    public static let morphResponse: Double = 0.44
-    public static let morphDamping: Double = 0.74
-    public static let homeScale: CGFloat = 0.9
-    public static let homeOutDuration: Double = 0.12
-    public static let homeInDuration: Double = 0.22
-    public static let homeInDelay: Double = 0.12
-    public static let pageOutDuration: Double = 0.16
+    /// The card's open / close (a Control Center module opening), one
+    /// spring each way: opening does not overshoot (the window's edge would
+    /// cut the bounce off and leave only the content wobbling); closing
+    /// settles with a slight bounce onto the card.
+    public static let expandResponse: Double = 0.34
+    public static let expandDamping: Double = 1.0
+    public static let collapseResponse: Double = 0.36
+    public static let collapseDamping: Double = 0.86
+    /// The platter's corner once it fills the panel: the card's, so the
+    /// Library page at rest looks as it always has.
+    public static let panelRadius: CGFloat = 14
+    /// Where along the open (0 = home, 1 = Library) each part changes: the
+    /// platter's outline fades out by `borderFadeEnd`; the card's numbers,
+    /// bars and › by `cardFadeEnd`; the rest of the home page fades by
+    /// `homeFadeEnd` and shrinks to `homeShrunkScale` by `homeScaleEnd`;
+    /// the Library page fades in from `libraryFadeStart` to `libraryFadeEnd`.
+    public static let borderFadeEnd: Double = 0.4
+    public static let cardFadeEnd: Double = 0.25
+    public static let homeFadeEnd: Double = 0.3
+    public static let homeScaleEnd: Double = 0.5
+    public static let homeShrunkScale: CGFloat = 0.96
+    public static let libraryFadeStart: Double = 0.3
+    public static let libraryFadeEnd: Double = 0.8
+    /// With Reduce Motion: a plain cross-fade, the platter not moving.
     public static let fadeDuration: Double = 0.18
     public static let barRadius: CGFloat = 2
     /// A bar with no uploads: a short stub, not a hairline.

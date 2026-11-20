@@ -16,6 +16,8 @@ struct MenuBarStatsCard: View {
   var place: (CGRect) -> Void = { _ in }
   let open: () -> Void
   @State private var hovered = false
+  /// The contents fade first as the card opens into the Library page.
+  @Environment(\.menuBarCardFade) private var fade
 
   var body: some View {
     let chart = library.chart(unit)
@@ -44,6 +46,7 @@ struct MenuBarStatsCard: View {
           .frame(width: DesignMetrics.menuBarLibrary.chevronColumnWidth)
           .frame(maxHeight: .infinity)
       }
+      .opacity(fade)
       // The card is as tall as its contents; the › column fills that
       // height and no more (the panel would otherwise stretch it).
       .fixedSize(horizontal: false, vertical: true)
@@ -104,7 +107,11 @@ struct MenuBarUploadBars: View {
   }
 }
 
-/// The Library page: replaces the home page in the same panel.
+/// The Library page: replaces the home page in the same panel, at the
+/// home page's height. The header stays at the top and the footer at the
+/// bottom; what lies between scrolls when it does not fit (the scroller
+/// hidden), and sits at the top when it does, the space left above the
+/// footer.
 struct MenuBarLibraryPage: View {
   @ObservedObject var app: PinaxAppModel
   @ObservedObject var preferences: PreferencesStore
@@ -115,6 +122,35 @@ struct MenuBarLibraryPage: View {
   let openGallery: () -> Void
 
   var body: some View {
+    VStack(alignment: .leading, spacing: DesignMetrics.menuBarLibrary.pageSpacing) {
+      header
+      ScrollView(.vertical) {
+        VStack(alignment: .leading, spacing: DesignMetrics.menuBarLibrary.pageSpacing) {
+          HStack(
+            alignment: .firstTextBaseline, spacing: DesignMetrics.menuBarLibrary.bigNumberSpacing
+          ) {
+            bigNumber(library.images.formatted(), "images in catalog")
+            bigNumber(PinaxFormat.fileSize(library.bytes), library.storedLine)
+          }
+          let segments = library.segments(preferences.menuBarStorageSplit)
+          if !segments.isEmpty {
+            storageBar(segments)
+          }
+          uploads
+          if !library.attention.isEmpty {
+            attention
+          }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+      }
+      .scrollIndicators(.hidden)
+      .scrollBounceBehavior(.basedOnSize)
+      Divider()
+      footer
+    }
+  }
+
+  private var header: some View {
     HStack(spacing: DesignMetrics.spacing.xs) {
       Button(action: back) {
         HStack(spacing: DesignMetrics.spacing.xs) {
@@ -127,19 +163,9 @@ struct MenuBarLibraryPage: View {
       Spacer()
       ProjectMenu(app: app, preferences: preferences)
     }
-    HStack(alignment: .firstTextBaseline, spacing: DesignMetrics.menuBarLibrary.bigNumberSpacing) {
-      bigNumber(library.images.formatted(), "images in catalog")
-      bigNumber(PinaxFormat.fileSize(library.bytes), library.storedLine)
-    }
-    let segments = library.segments(preferences.menuBarStorageSplit)
-    if !segments.isEmpty {
-      storageBar(segments)
-    }
-    uploads
-    if !library.attention.isEmpty {
-      attention
-    }
-    Divider()
+  }
+
+  private var footer: some View {
     HStack {
       if let scanned = library.scanned {
         Text(scanned).pinaxSecondary()
@@ -286,12 +312,12 @@ extension View {
   /// The statistics and uploads cards' translucent fill and frame. The
   /// whole card tints under the pointer; no part of it draws its own
   /// highlight (a separate › column fill read as a rounded shadow).
-  func menuBarCard(hovered: Bool = false, border: Bool = true) -> some View {
+  func menuBarCard(hovered: Bool = false) -> some View {
     let shape = MenuBarPalette.cardShape
     return background(
       ZStack {
         shape.fill(hovered ? MenuBarPalette.cardHover : MenuBarPalette.card)
-        shape.strokeBorder(MenuBarPalette.cardBorder).opacity(border ? 1 : 0)
+        shape.strokeBorder(MenuBarPalette.cardBorder)
       })
   }
 }
