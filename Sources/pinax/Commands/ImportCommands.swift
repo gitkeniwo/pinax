@@ -81,17 +81,16 @@ struct ImportPicGoGalleryCommand: AsyncParsableCommand {
     let assets = try PicGoBackfill.assets(for: selected, in: database)
     let plan = try await PicGoBackfill.plan(assets: assets, inventory: inventory)
 
-    FileHandle.standardError.write(
-      Data(
-        (
-          "Backfill: \(assets.count) objects checked — "
-            + "\(plan.matchingKeys.count) already carry matching metadata, "
-            + "\(plan.candidates.count) will be re-uploaded onto themselves "
-            + "with sha256/orig-filename/width/height metadata "
-            + "(Content-Type preserved; Cache-Control set to the immutable policy where "
-            + "absent; no ACL is sent).\n"
-        ).utf8
-      ))
+    let summary = """
+      Backfill: \(assets.count) objects checked — \
+      \(plan.matchingKeys.count) already carry matching metadata, \
+      \(plan.candidates.count) will be re-uploaded onto themselves \
+      with sha256/orig-filename/width/height metadata \
+      (Content-Type preserved; Cache-Control set to the immutable policy where \
+      absent; no ACL is sent).
+
+      """
+    FileHandle.standardError.write(Data(summary.utf8))
     for candidate in plan.candidates {
       FileHandle.standardError.write(Data("WRITE\t\(candidate.asset.key)\n".utf8))
     }
