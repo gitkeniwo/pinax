@@ -103,17 +103,20 @@ import Testing
     await spin(0.8)
     let outline = try #require(sidebarOutline(in: window.contentView), "no sidebar outline")
 
-    // Row 0 is the "Time" header; the years start collapsed.
-    #expect(outline.numberOfRows == 3)
+    // Row 0 is the "Time" header. The newest year starts open, with its
+    // months flat in the outline (no native level below the year's):
+    // 2026 › August, July, then 2025.
+    #expect(outline.numberOfRows == 5)
     outline.selectRowIndexes(IndexSet(integer: 1), byExtendingSelection: false)
     await spin(until: { model.sidebarSelection == .year("2026") })
     #expect(model.sidebarSelection == .year("2026"))
 
-    // The year opens by its square, and its months
-    // sit flat in the outline (no native level below the year's).
+    // The year closes and reopens by its square.
+    await clickSidebarSquare(row: 1, depth: 0, in: outline, window: window)
+    await spin(until: { outline.numberOfRows == 3 })
+    #expect(outline.numberOfRows == 3)
     await clickSidebarSquare(row: 1, depth: 0, in: outline, window: window)
     await spin(until: { outline.numberOfRows == 5 })
-    // 2026 › August, July, then 2025.
     #expect(outline.numberOfRows == 5)
     outline.selectRowIndexes(IndexSet(integer: 3), byExtendingSelection: false)
     await spin(until: { model.sidebarSelection == .month("2026-07") })
