@@ -12,15 +12,19 @@ public struct DropZoneView: View {
 
   @ObservedObject var model: DropZoneModel
   @ObservedObject var state: DropZoneViewState
+  /// Settings ▸ Drop Zone's preview: drawn the same, but no drop target,
+  /// and nothing reported back for the app's own panel to read.
+  let isPreview: Bool
   @Environment(\.colorScheme) private var colorScheme
 
   public init(model: DropZoneModel) {
     self.init(model: model, state: DropZoneViewState())
   }
 
-  init(model: DropZoneModel, state: DropZoneViewState) {
+  init(model: DropZoneModel, state: DropZoneViewState, isPreview: Bool = false) {
     self.model = model
     self.state = state
+    self.isPreview = isPreview
   }
 
   private var palette: DropZonePalette { .of(colorScheme) }
@@ -51,17 +55,34 @@ public struct DropZoneView: View {
       tint: palette.panelTint, rim: palette.panelRim)
     .overlay(alignment: .topLeading) { preview }
     .coordinateSpace(name: Self.space)
-    .onPreferenceChange(DropZoneLayoutKey.self) { [state] frames in
-      MainActor.assumeIsolated { state.layoutFrames = frames }
-    }
-    .onPreferenceChange(DropZoneMotionKey.self) { [state] motions in
-      MainActor.assumeIsolated { state.motions = motions }
-    }
-    .dropDestination(for: URL.self) { urls, _ in
-      model.drop(fileURLs: urls)
-      return true
-    } isTargeted: { targeted in
-      state.isDropTargeted = targeted
+    .modifier(PanelHookup(model: model, state: state, isActive: !isPreview))
+  }
+
+  /// The app's own panel only: the layout and motion reports its tests
+  /// read, and the drop target. A preview has neither.
+  private struct PanelHookup: ViewModifier {
+    let model: DropZoneModel
+    let state: DropZoneViewState
+    let isActive: Bool
+
+    func body(content: Content) -> some View {
+      if isActive {
+        content
+          .onPreferenceChange(DropZoneLayoutKey.self) { [state] frames in
+            MainActor.assumeIsolated { state.layoutFrames = frames }
+          }
+          .onPreferenceChange(DropZoneMotionKey.self) { [state] motions in
+            MainActor.assumeIsolated { state.motions = motions }
+          }
+          .dropDestination(for: URL.self) { urls, _ in
+            model.drop(fileURLs: urls)
+            return true
+          } isTargeted: { targeted in
+            state.isDropTargeted = targeted
+          }
+      } else {
+        content
+      }
     }
   }
 

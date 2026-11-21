@@ -19,6 +19,9 @@ extension SettingsTab {
   /// Projects and Backends add a list column between sidebar and detail.
   var hasListColumn: Bool { self == .projects || self == .backends }
 
+  /// Drop Zone adds a preview column right of its form.
+  var hasPreviewColumn: Bool { self == .dropZone }
+
   /// The sidebar's rows in order, a gap before Drop Zone, Projects and
   /// Maintenance.
   static let sidebarGroups: [[SettingsTab]] = [

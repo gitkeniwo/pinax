@@ -17,6 +17,22 @@ extension View {
       .foregroundStyle(.secondary)
   }
 
+  /// Drop Zone's preview: the size under the desktop (11, secondary,
+  /// even digits).
+  public func pinaxSettingsPreviewLabel() -> some View {
+    font(.subheadline)
+      .monospacedDigit()
+      .foregroundStyle(.secondary)
+      .lineLimit(1)
+  }
+
+  /// Drop Zone's preview: the note at the column's foot (11, tertiary).
+  public func pinaxSettingsPreviewNote() -> some View {
+    font(.subheadline)
+      .foregroundStyle(.tertiary)
+      .lineLimit(1)
+  }
+
   /// A link-styled button in a row (`.lnk`: 12).
   public func pinaxSettingsLink() -> some View {
     font(.callout)
