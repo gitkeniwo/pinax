@@ -4,7 +4,7 @@
 
 # Pinax
 
-Pinax is a macOS-first, self-hosted image catalog. It owns the link and asset database, while upload is one action it performs, so image history is not locked into a specific image-hosting GUI.
+Pinax is a native macOS app and CLI for managing a local-first image catalog. It tracks assets, tags, and live project references while uploading directly to your own S3-compatible object storage, keeping your image history independent of any uploader GUI.
 
 <img width="1250" height="775" alt="image" src="https://github.com/user-attachments/assets/4602fbfb-ffc0-4097-8187-f04e9ac00d65" />
 
