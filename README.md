@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="Design/AppIcon/pinax.svg" width="256" alt="Pinax app icon">
+</p>
+
 # Pinax
 
 Pinax is a macOS-first, self-hosted image catalog. It owns the link and asset database, while upload is one action it performs, so image history is not locked into a specific image-hosting GUI.
