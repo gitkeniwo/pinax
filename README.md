@@ -6,6 +6,9 @@
 
 Pinax is a macOS-first, self-hosted image catalog. It owns the link and asset database, while upload is one action it performs, so image history is not locked into a specific image-hosting GUI.
 
+<img width="1250" height="775" alt="image" src="https://github.com/user-attachments/assets/4602fbfb-ffc0-4097-8187-f04e9ac00d65" />
+
+
 ## Install
 
 Install the app and the command-line tool with Homebrew:
