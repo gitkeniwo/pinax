@@ -199,7 +199,7 @@ struct AssetGridCell: View {
   private var sourceCaption: SourceCaption? {
     SourceCaption.make(
       style: overlays.sourceTagStyle,
-      source: AssetSource.of(meta: row.item.asset.meta),
+      source: row.source,
       tier: tier, showsFilename: overlays.showsFilename)
   }
 
@@ -544,26 +544,17 @@ struct AssetGridCell: View {
     row.item.asset.originalFilename ?? row.item.asset.key
   }
 
-  private var uploadDate: String {
-    PinaxFormat.date(row.item.asset.uploadedAt, style: .day)
-  }
+  private var uploadDate: String { row.dayText }
 
   private var hasNote: Bool {
     !(row.item.asset.note?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
   }
 
-  private var dimensions: String? {
-    guard let width = row.item.asset.width, let height = row.item.asset.height else { return nil }
-    return "\(width) × \(height)"
-  }
+  private var dimensions: String? { row.dimensionsText }
 
-  private var format: String {
-    PinaxFormat.shortKind(mime: row.item.asset.mime)
-  }
+  private var format: String { row.formatText }
 
-  private var fileSize: String {
-    row.item.asset.byteSize.formatted(.byteCount(style: .file))
-  }
+  private var fileSize: String { row.sizeText }
 }
 
 /// The Quick Look transition anchor: a concrete AppKit view the panel can
