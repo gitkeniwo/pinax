@@ -5,7 +5,7 @@ struct LabelCommand: AsyncParsableCommand {
   static let configuration = CommandConfiguration(
     commandName: "label",
     abstract: "Manage color labels.",
-    subcommands: [LabelListCommand.self]
+    subcommands: [LabelListCommand.self, LabelAddCommand.self, LabelRemoveCommand.self]
   )
 }
 

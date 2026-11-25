@@ -25,49 +25,76 @@ public struct LabelSummary: Sendable, Equatable {
   }
 }
 
+/// What the curation writes can change about one asset.
+public struct CurationState: Equatable, Sendable {
+  public let state: String
+  public let favorite: Bool
+  /// Finder's order.
+  public let labels: [AssetLabel]
+  /// The slugs of the projects the asset belongs to, sorted.
+  public let projects: [String]
+}
+
+/// One asset a curation write resolved, as it was and as the write leaves it.
+/// The two are equal when the asset was already there.
+public struct CurationChange: Equatable, Sendable {
+  public let sha256: String
+  public let key: String
+  public let before: CurationState
+  public let after: CurationState
+}
+
 /// Curation writes: archive and put back, favourite, colour labels. Every one
 /// of them is a catalog row change and nothing else — no function here takes
-/// a backend, and archiving never deletes a remote object.
+/// a backend, and archiving never deletes a remote object. Each takes any
+/// number of identifiers and is one transaction: unless every identifier
+/// resolves, nothing is written. With `dryRun` the transaction is rolled
+/// back, so what is returned is what the write would have done.
 extension CatalogAssets {
   /// Archive (`.archived`) or Put Back (`.active`). Stamps `updated_at`, so
   /// `changeStamp` moves and the Catalog tree refetches its counts.
+  @discardableResult
   public static func setState(
-    _ state: AssetState, for identifiers: [String], in database: DatabasePool, now: Date = Date()
-  ) async throws {
+    _ state: AssetState, for identifiers: [String], in database: DatabasePool,
+    dryRun: Bool = false, now: Date = Date()
+  ) async throws -> [CurationChange] {
     let date = timestamp(now)
-    try await database.write { db in
-      for id in try assetIDs(identifiers, db: db) {
+    return try await curate(identifiers, in: database, dryRun: dryRun) { db, assets in
+      for asset in assets {
         try db.execute(
           sql: "UPDATE asset SET state = ?, updated_at = ? WHERE id = ?",
-          arguments: [state.rawValue, date, id])
+          arguments: [state.rawValue, date, asset.id])
       }
     }
   }
 
+  @discardableResult
   public static func setFavorite(
-    _ favorite: Bool, for identifiers: [String], in database: DatabasePool
-  ) async throws {
-    try await database.write { db in
-      for id in try assetIDs(identifiers, db: db) {
+    _ favorite: Bool, for identifiers: [String], in database: DatabasePool, dryRun: Bool = false
+  ) async throws -> [CurationChange] {
+    try await curate(identifiers, in: database, dryRun: dryRun) { db, assets in
+      for asset in assets {
         try db.execute(
-          sql: "UPDATE asset SET favorite = ? WHERE id = ?", arguments: [favorite, id])
+          sql: "UPDATE asset SET favorite = ? WHERE id = ?", arguments: [favorite, asset.id])
       }
     }
   }
 
+  @discardableResult
   public static func setLabel(
-    _ label: AssetLabel, _ applied: Bool, for identifiers: [String], in database: DatabasePool
-  ) async throws {
-    try await database.write { db in
-      for id in try assetIDs(identifiers, db: db) {
+    _ label: AssetLabel, _ applied: Bool, for identifiers: [String], in database: DatabasePool,
+    dryRun: Bool = false
+  ) async throws -> [CurationChange] {
+    try await curate(identifiers, in: database, dryRun: dryRun) { db, assets in
+      for asset in assets {
         if applied {
           try db.execute(
             sql: "INSERT INTO asset_label (asset_id, label) VALUES (?, ?) ON CONFLICT DO NOTHING",
-            arguments: [id, label.rawValue])
+            arguments: [asset.id, label.rawValue])
         } else {
           try db.execute(
             sql: "DELETE FROM asset_label WHERE asset_id = ? AND label = ?",
-            arguments: [id, label.rawValue])
+            arguments: [asset.id, label.rawValue])
         }
       }
     }
@@ -101,7 +128,7 @@ extension CatalogAssets {
     identifiers: [String], in database: DatabasePool
   ) async throws -> Int {
     try await database.read { db in
-      let ids = try assetIDs(identifiers, db: db)
+      let ids = try resolveAll(identifiers, db: db).compactMap(\.id)
       guard !ids.isEmpty else { return 0 }
       return try Int.fetchOne(
         db,
@@ -144,12 +171,91 @@ extension CatalogAssets {
     }
   }
 
-  private static func assetIDs(_ identifiers: [String], db: GRDB.Database) throws -> [Int64] {
-    try identifiers.map { identifier in
-      guard let id = try resolveInWrite(identifier, db: db)?.id else {
-        throw AssetCatalogError.assetNotFound(identifier)
+  /// The assets the identifiers name, in order, each once. Every identifier
+  /// is tried, so the error lists all that did not resolve.
+  static func resolveAll(_ identifiers: [String], db: GRDB.Database) throws -> [Asset] {
+    var assets: [Asset] = []
+    var seenIDs = Set<Int64>()
+    var tried = Set<String>()
+    var unresolved: [AssetCatalogError] = []
+    for identifier in identifiers where tried.insert(identifier).inserted {
+      do {
+        guard let asset = try resolveInWrite(identifier, db: db), let id = asset.id else {
+          throw AssetCatalogError.assetNotFound(identifier)
+        }
+        if seenIDs.insert(id).inserted { assets.append(asset) }
+      } catch let error as AssetCatalogError {
+        unresolved.append(error)
       }
-      return id
+    }
+    guard unresolved.isEmpty else {
+      throw AssetCatalogError.unresolvedIdentifiers(unresolved)
+    }
+    return assets
+  }
+
+  static func curate(
+    _ identifiers: [String], in database: DatabasePool, dryRun: Bool,
+    _ apply: @escaping @Sendable (GRDB.Database, [Asset]) throws -> Void
+  ) async throws -> [CurationChange] {
+    try await database.writeWithoutTransaction { db in
+      try curate(identifiers, db: db, dryRun: dryRun, apply)
+    }
+  }
+
+  static func curate(
+    _ identifiers: [String], in database: DatabasePool, dryRun: Bool,
+    _ apply: (GRDB.Database, [Asset]) throws -> Void
+  ) throws -> [CurationChange] {
+    try database.writeWithoutTransaction { db in
+      try curate(identifiers, db: db, dryRun: dryRun, apply)
+    }
+  }
+
+  private static func curate(
+    _ identifiers: [String], db: GRDB.Database, dryRun: Bool,
+    _ apply: (GRDB.Database, [Asset]) throws -> Void
+  ) throws -> [CurationChange] {
+    var changes: [CurationChange] = []
+    try db.inTransaction {
+      let assets = try resolveAll(identifiers, db: db)
+      let before = try curationStates(of: assets, db: db)
+      try apply(db, assets)
+      let after = try curationStates(of: assets, db: db)
+      changes = zip(assets, zip(before, after)).map { asset, states in
+        CurationChange(
+          sha256: asset.sha256, key: asset.key, before: states.0, after: states.1)
+      }
+      return dryRun ? .rollback : .commit
+    }
+    return changes
+  }
+
+  /// In the order of `assets`, whose rows are read again.
+  private static func curationStates(
+    of assets: [Asset], db: GRDB.Database
+  ) throws -> [CurationState] {
+    let ids = assets.compactMap(\.id)
+    guard !ids.isEmpty else { return [] }
+    let current = try Asset.fetchAll(db, keys: ids)
+    let states = Dictionary(uniqueKeysWithValues: current.map { ($0.id ?? -1, $0.state) })
+    let favorites = try favoriteIDs(among: assets, in: db)
+    let labels = try labelsByAssetID(for: assets, in: db)
+    let memberships = try Row.fetchAll(
+      db,
+      sql: """
+        SELECT ap.asset_id AS asset_id, p.slug AS slug
+        FROM asset_project ap JOIN project p ON p.id = ap.project_id
+        WHERE ap.asset_id IN (\(ids.map { _ in "?" }.joined(separator: ",")))
+        ORDER BY p.slug
+        """,
+      arguments: StatementArguments(ids))
+    let projects = Dictionary(grouping: memberships, by: { $0["asset_id"] as Int64 })
+      .mapValues { rows in rows.map { $0["slug"] as String } }
+    return ids.map { id in
+      CurationState(
+        state: states[id] ?? "", favorite: favorites.contains(id), labels: labels[id] ?? [],
+        projects: projects[id] ?? [])
     }
   }
 }

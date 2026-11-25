@@ -121,6 +121,8 @@ import Testing
       (AssetCatalogError.projectNotFound("x"), 66),
       (AssetCatalogError.unlinkBlockedByLiveUsage(project: "x", liveCount: 1), 77),
       (AssetCatalogError.invalidTag(""), nil),
+      (AssetCatalogError.unresolvedIdentifiers([.assetNotFound("x")]), 66),
+      (AssetCatalogError.unlinkBlockedForAssets(project: "x", assets: []), 77),
       (CatalogConfigurationError.backendNotFound("x"), 66),
       (CatalogConfigurationError.projectNotFound("x"), 66),
       (CatalogConfigurationError.sourceNotFound(project: "x", label: "y"), 66),

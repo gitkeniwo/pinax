@@ -175,7 +175,10 @@ struct ProjectCommand: ParsableCommand {
   static let configuration = CommandConfiguration(
     commandName: "project",
     abstract: "Manage upload projects.",
-    subcommands: [ProjectAdd.self, ProjectList.self, ProjectSet.self, ProjectSourceCommand.self]
+    subcommands: [
+      ProjectAdd.self, ProjectList.self, ProjectSet.self, ProjectSourceCommand.self,
+      ProjectLinkCommand.self, ProjectUnlinkCommand.self, ProjectMoveCommand.self,
+    ]
   )
 }
 

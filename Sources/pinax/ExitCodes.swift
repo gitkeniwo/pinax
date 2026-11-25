@@ -38,8 +38,8 @@ enum CLIExit {
       return error.exitCode
     case let error as AssetCatalogError:
       switch error {
-      case .assetNotFound, .projectNotFound: return notFound
-      case .unlinkBlockedByLiveUsage: return refused
+      case .assetNotFound, .projectNotFound, .unresolvedIdentifiers: return notFound
+      case .unlinkBlockedByLiveUsage, .unlinkBlockedForAssets: return refused
       case .invalidSHA256Prefix, .ambiguousIdentifier, .invalidTag: return nil
       }
     case let error as CatalogConfigurationError:
