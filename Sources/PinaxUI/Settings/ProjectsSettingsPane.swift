@@ -218,8 +218,114 @@ struct ProjectUsageTrackingSection: View {
   }
 }
 
+/// How a project's uploads are compressed: a switch, then the longest
+/// edge, the quality and whether metadata goes. Only the uploaded copy is
+/// compressed. Every choice is written at once; while the switch is off the
+/// three rows below it keep their values but are disabled and dimmed, as
+/// the Drop Zone page's sections are under its switch.
+struct ProjectCompressionSection: View {
+  let row: ProjectSettingsRow
+  @ObservedObject var model: ProjectSettingsModel
+
+  static let title = "Compression"
+  static let enabledTitle = "Compress on upload"
+  static let longestEdgeTitle = "Longest edge"
+  static let qualityTitle = "Quality"
+  static let metadataTitle = "Remove metadata"
+  static let metadataNote = "Includes location."
+  static let dontResize = "Don't resize"
+  /// The menu's sizes, in pixels; Don't resize follows a divider.
+  static let longestEdges = [1600, 2048, 2560, 3840]
+
+  /// "2048 px", or Don't resize.
+  static func longestEdgeLabel(_ edge: Int?) -> String {
+    edge.map { "\($0) px" } ?? dontResize
+  }
+
+  static func qualityLabel(_ quality: CompressionQuality) -> String {
+    switch quality {
+    case .high: "High"
+    case .medium: "Medium"
+    case .small: "Small"
+    }
+  }
+
+  /// The menu's sizes, plus a stored one that is not among them (set from
+  /// the command line) so the menu can still mark it.
+  var edgeChoices: [Int] {
+    guard let edge = row.compression.options.longestEdge, !Self.longestEdges.contains(edge) else {
+      return Self.longestEdges
+    }
+    return (Self.longestEdges + [edge]).sorted()
+  }
+
+  var isEnabled: Binding<Bool> {
+    binding(\.isEnabled)
+  }
+
+  var longestEdge: Binding<Int?> {
+    binding(\.options.longestEdge)
+  }
+
+  var quality: Binding<CompressionQuality> {
+    binding(\.options.quality)
+  }
+
+  var removesMetadata: Binding<Bool> {
+    binding(\.options.removesMetadata)
+  }
+
+  private func binding<Value>(_ keyPath: WritableKeyPath<ProjectCompression, Value>) -> Binding<Value> {
+    Binding(
+      get: { row.compression[keyPath: keyPath] },
+      set: { value in model.setCompression(forProject: row.slug) { $0[keyPath: keyPath] = value } })
+  }
+
+  var body: some View {
+    let compression = row.compression
+    SettingsSection(Self.title) {
+      SettingsGroup {
+        SettingsRow(Self.enabledTitle) {
+          SettingsRowSwitch(Self.enabledTitle, isOn: isEnabled)
+        }
+        SettingsRowDivider()
+        Group {
+          SettingsRow(Self.longestEdgeTitle) {
+            SettingsMenuPicker(Self.longestEdgeTitle, selection: longestEdge) {
+              ForEach(edgeChoices, id: \.self) { edge in
+                Text(Self.longestEdgeLabel(edge)).tag(Int?.some(edge))
+              }
+              Divider()
+              Text(Self.dontResize).tag(Int?.none)
+            } label: {
+              Text(Self.longestEdgeLabel(compression.options.longestEdge))
+            }
+          }
+          SettingsRowDivider()
+          SettingsRow(Self.qualityTitle) {
+            SettingsMenuPicker(Self.qualityTitle, selection: quality) {
+              ForEach(CompressionQuality.allCases, id: \.self) { quality in
+                Text(Self.qualityLabel(quality)).tag(quality)
+              }
+            } label: {
+              Text(Self.qualityLabel(compression.options.quality))
+            }
+          }
+          SettingsRowDivider()
+          SettingsRow(Self.metadataTitle, subtitle: Self.metadataNote) {
+            SettingsRowSwitch(Self.metadataTitle, isOn: removesMetadata)
+          }
+        }
+        .disabled(!compression.isEnabled)
+        .opacity(compression.isEnabled ? 1 : DesignMetrics.settings.disabledOpacity)
+      }
+    }
+  }
+}
+
 /// The page for one project: who it is, where its uploads
-/// go, the folders Scan Now reads, and whether its usage is tracked.
+/// go and how they are compressed, the folders Scan Now reads, and whether
+/// its usage is tracked.
 ///
 /// Storage: its note says the menu and the fields change future uploads
 /// only. The Key template sits under Key prefix, in the same group.
@@ -310,6 +416,8 @@ struct ProjectEditorView: View {
           KeyTemplateBlock(row: row, keyPrefix: prefixDraft, model: model)
         }
       }
+
+      ProjectCompressionSection(row: row, model: model)
 
       ProjectSourcesSection(
         row: row, model: model, isScanning: model.scanActivity.map(Self.isRunning) ?? false)

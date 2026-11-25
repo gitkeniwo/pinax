@@ -61,6 +61,7 @@ import Testing
     var applyResult: ExternalMigrationResult?
     private(set) var preparedTargets: [[ExternalMigrationTarget]] = []
     private(set) var allowed: [Set<String>] = []
+    private(set) var compressions: [CompressionChoice] = []
     private(set) var uploaded = 0
 
     var isRunning: Bool { lock.withLock { running || busyElsewhere } }
@@ -84,10 +85,11 @@ import Testing
     }
 
     func apply(
-      fromRun runID: Int64, allowedSources: Set<String>, cancellation: ExternalMigrationCancellation,
+      fromRun runID: Int64, allowedSources: Set<String>, compression: CompressionChoice,
+      cancellation: ExternalMigrationCancellation,
       progress: @escaping @Sendable (ExternalMigrationProgress) -> Void
     ) async throws -> ExternalMigrationResult {
-      lock.withLock { running = true; allowed.append(allowedSources) }
+      lock.withLock { running = true; allowed.append(allowedSources); compressions.append(compression) }
       defer { lock.withLock { running = false } }
       if let applyError { throw applyError }
       for index in 1...applyImages {

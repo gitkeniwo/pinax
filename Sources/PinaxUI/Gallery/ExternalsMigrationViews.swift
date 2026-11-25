@@ -35,6 +35,9 @@ struct ExternalMigrationSheet: View {
       if !confirmation.images.isEmpty {
         ExternalMigrationImageList(confirmation: confirmation)
       }
+      if !confirmation.compression.isEmpty {
+        compressRow
+      }
       ForEach(confirmation.sources) { source in
         sourceRow(source)
       }
@@ -162,6 +165,22 @@ struct ExternalMigrationSheet: View {
   /// A divider starting under the row's text, past its badge.
   static var rowDivider: some View {
     Divider().padding(.leading, rowInset + ColorSquare.Size.sidebar.side + DesignMetrics.spacing.s)
+  }
+
+  /// Compress images: a checkbox that starts as the target project says.
+  /// Projects that disagree show it mixed until it is clicked.
+  private var compressRow: some View {
+    Toggle(
+      sources: Binding(get: { model.migrationCompression }, set: { model.migrationCompression = $0 }),
+      isOn: \.self
+    ) {
+      VStack(alignment: .leading, spacing: 2) {
+        Text(ExternalMigrationConfirmation.compressTitle)
+        Text(confirmation.compressSubtitle)
+          .pinaxSecondary()
+      }
+    }
+    .toggleStyle(.checkbox)
   }
 
   private func sourceRow(_ source: ExternalMigrationConfirmation.Source) -> some View {

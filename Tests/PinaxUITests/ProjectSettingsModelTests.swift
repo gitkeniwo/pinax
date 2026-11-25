@@ -243,6 +243,7 @@ private struct SecretFailingSettingsStore: ProjectSettingsStore {
   func setSources(_ sources: [ProjectSource], projectSlug: String) throws {}
   func setUsageTracking(_ tracking: UsageTracking, projectSlug: String) throws {}
   func setAutoScan(_ autoScan: ProjectAutoScan, projectSlug: String) throws {}
+  func setCompression(_ compression: ProjectCompression, projectSlug: String) throws {}
   func addProject(_ draft: NewProjectDraft) async throws -> ProjectSettingsSnapshot {
     throw SecretError(secret: "SHOULD-NOT-APPEAR")
   }

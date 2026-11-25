@@ -13,7 +13,8 @@ public protocol ExternalsMigrating: Sendable {
   ) async throws -> ExternalMigrationPreparation
 
   func apply(
-    fromRun runID: Int64, allowedSources: Set<String>, cancellation: ExternalMigrationCancellation,
+    fromRun runID: Int64, allowedSources: Set<String>, compression: CompressionChoice,
+    cancellation: ExternalMigrationCancellation,
     progress: @escaping @Sendable (ExternalMigrationProgress) -> Void
   ) async throws -> ExternalMigrationResult
 
@@ -31,11 +32,29 @@ public struct ExternalMigrationPreparation: Sendable {
   public var bucket: String?
   /// The backend's kind ("r2", "s3"), the sheet's small tag.
   public var storageKind: String?
+  /// Each target project's compression switch, in the targets' order.
+  public var compression: [ExternalMigrationCompressionTarget]
 
-  public init(result: ExternalMigrationResult, bucket: String?, storageKind: String? = nil) {
+  public init(
+    result: ExternalMigrationResult, bucket: String?, storageKind: String? = nil,
+    compression: [ExternalMigrationCompressionTarget] = []
+  ) {
     self.result = result
     self.bucket = bucket
     self.storageKind = storageKind
+    self.compression = compression
+  }
+}
+
+/// A migration's target project as the Compress images box reads it: its
+/// name and whether its uploads are compressed.
+public struct ExternalMigrationCompressionTarget: Equatable, Sendable {
+  public let projectName: String
+  public let compresses: Bool
+
+  public init(projectName: String, compresses: Bool) {
+    self.projectName = projectName
+    self.compresses = compresses
   }
 }
 
@@ -79,11 +98,14 @@ public struct CatalogExternalsMigrator: ExternalsMigrating {
       targets: targets, database: database, fetcher: fetcher, cacheRoot: cacheRoot,
       cancellation: cancellation, progress: progress)
     let backend = try backend(ofRun: result.runID)
-    return ExternalMigrationPreparation(result: result, bucket: backend?.bucket, storageKind: backend?.kind)
+    let compression = Self.compressionTargets(targets, projects: try CatalogConfiguration.projects(in: database))
+    return ExternalMigrationPreparation(
+      result: result, bucket: backend?.bucket, storageKind: backend?.kind, compression: compression)
   }
 
   public func apply(
-    fromRun runID: Int64, allowedSources: Set<String>, cancellation: ExternalMigrationCancellation,
+    fromRun runID: Int64, allowedSources: Set<String>, compression: CompressionChoice,
+    cancellation: ExternalMigrationCancellation,
     progress: @escaping @Sendable (ExternalMigrationProgress) -> Void
   ) async throws -> ExternalMigrationResult {
     guard let backend = try backend(ofRun: runID) else { throw RewriteRunError.runNotFound(runID) }
@@ -93,7 +115,23 @@ public struct CatalogExternalsMigrator: ExternalsMigrating {
     return try await ExternalMigration.apply(
       fromRun: runID, allowedSources: allowedSources, database: database,
       uploader: S3Uploader(backend: backend, credentials: credentials), cacheRoot: cacheRoot,
-      cancellation: cancellation, progress: progress, commands: commands, runner: runner)
+      compression: compression, cancellation: cancellation, progress: progress, commands: commands,
+      runner: runner)
+  }
+
+  /// Each target project once, in the targets' order, with its name and
+  /// whether its uploads are compressed.
+  static func compressionTargets(
+    _ targets: [ExternalMigrationTarget], projects: [Project]
+  ) -> [ExternalMigrationCompressionTarget] {
+    var seen = Set<String>()
+    return targets.compactMap { target in
+      guard seen.insert(target.project).inserted,
+        let project = projects.first(where: { $0.slug == target.project })
+      else { return nil }
+      return ExternalMigrationCompressionTarget(
+        projectName: project.name, compresses: ProjectSettings(meta: project.meta).compression.isEnabled)
+    }
   }
 
   public func diff(ofRun runID: Int64) async throws -> String {
@@ -221,6 +259,9 @@ public struct ExternalMigrationConfirmation: Equatable, Sendable {
   public let sources: [Source]
   /// The images to upload, largest first; reused ones are not uploaded.
   public var images: [Image] = []
+  /// The target projects' compression switches; empty when nothing is
+  /// uploaded, and then the sheet has no Compress images box.
+  public var compression: [ExternalMigrationCompressionTarget] = []
 
   public static let subtitle =
     "Pinax has downloaded them. Migrating uploads each image to your bucket, adds it to the library and rewrites the links in your files. It doesn’t commit."
@@ -245,6 +286,20 @@ public struct ExternalMigrationConfirmation: Equatable, Sendable {
   public func canMigrate(allowed: Set<String>) -> Bool {
     links > 0 && sources.allSatisfy { allowed.contains($0.id) }
   }
+
+  public static let compressTitle = "Compress images"
+
+  /// "Uses astro's compression settings.", or each project's when the
+  /// links are in several.
+  public var compressSubtitle: String {
+    compression.count == 1
+      ? "Uses \(compression[0].projectName)'s compression settings."
+      : "Uses each project's compression settings."
+  }
+
+  /// The box's starting state, one value per target project: ticked where
+  /// that project compresses its uploads.
+  public var compressionDefaults: [Bool] { compression.map(\.compresses) }
 
   public var migrateTitle: String {
     links > 0 ? "Migrate \(PinaxFormat.count(links, singular: "Link"))" : "Nothing to Migrate"
@@ -325,7 +380,8 @@ public struct ExternalMigrationConfirmation: Equatable, Sendable {
     }
     return ExternalMigrationConfirmation(
       runID: result.runID, links: summary.migratable.links + summary.reused.links, lines: lines,
-      hosts: hosts, sources: sources, images: images)
+      hosts: hosts, sources: sources, images: images,
+      compression: summary.migratable.images > 0 ? preparation.compression : [])
   }
 
   /// The images the preparation would upload: each `download_finished`
