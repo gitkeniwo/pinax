@@ -91,6 +91,11 @@ public struct ThumbnailRequest: Sendable, Hashable {
 
 /// Owns the on-disk thumbnail cache and the bounded download pipeline.
 ///
+/// Two bounds, each guarding its own resource: a download slot covers only
+/// fetching an original's bytes, and the decode pool covers every ImageIO
+/// step — reading a cached file, downscaling, writing the JPEG. The actor
+/// itself does bookkeeping only, so a memory hit never waits behind pixels.
+///
 /// The cache directory is pure derived data: deleting it at any moment is harmless,
 /// it is never referenced from SQLite, and every entry is rebuildable from the
 /// original object. A failed download is never recorded — the next appearance of a
@@ -98,10 +103,17 @@ public struct ThumbnailRequest: Sendable, Hashable {
 /// tightly.
 public actor ThumbnailCache {
   public static let maxPixelSize: Int = 512
+  /// Upper bound on the decoded pixels held in memory; each entry costs
+  /// `bytesPerRow × height`. The entry count limit stays as well — whichever
+  /// is reached first evicts.
+  static let memoryCostLimit = 256 * 1024 * 1024
+  static let memoryCountLimit = 512
+  static let defaultDecodeConcurrency = 3
 
   private let directory: URL
   private let fetcher: ThumbnailFetcher
   private let maxConcurrentDownloads: Int
+  nonisolated let decodePool: ThumbnailDecodePool
   /// `NSCache` is documented thread-safe, and isolating it would force the
   /// reflow peek (below) through an actor hop it cannot afford; the unsafe
   /// opt-out is exactly this one constant, whose every use is a cache call.
@@ -117,6 +129,23 @@ public actor ThumbnailCache {
     fetcher: ThumbnailFetcher? = nil,
     maxConcurrentDownloads: Int = 4
   ) {
+    self.init(
+      cacheDirectory: cacheDirectory,
+      fetcher: fetcher,
+      maxConcurrentDownloads: maxConcurrentDownloads,
+      decodeConcurrency: Self.defaultDecodeConcurrency,
+      beforeDecode: nil
+    )
+  }
+
+  /// `beforeDecode` runs on the decode thread ahead of each pooled job.
+  init(
+    cacheDirectory: URL?,
+    fetcher: ThumbnailFetcher?,
+    maxConcurrentDownloads: Int,
+    decodeConcurrency: Int,
+    beforeDecode: (@Sendable () -> Void)?
+  ) {
     let base =
       cacheDirectory
       ?? FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?
@@ -124,7 +153,20 @@ public actor ThumbnailCache {
     self.directory = base ?? FileManager.default.temporaryDirectory.appendingPathComponent("thumbs")
     self.fetcher = fetcher ?? ThumbnailCache.defaultFetcher
     self.maxConcurrentDownloads = max(1, maxConcurrentDownloads)
-    memory.countLimit = 512
+    self.decodePool = ThumbnailDecodePool(limit: decodeConcurrency, beforeWork: beforeDecode)
+    memory.countLimit = Self.memoryCountLimit
+    memory.totalCostLimit = Self.memoryCostLimit
+  }
+
+  /// What an image costs against `memoryCostLimit`.
+  static func memoryCost(of image: CGImage) -> Int {
+    image.bytesPerRow * image.height
+  }
+
+  nonisolated var memoryTotalCostLimit: Int { memory.totalCostLimit }
+
+  private func remember(_ image: CGImage, for sha256: String) {
+    memory.setObject(image, forKey: sha256 as NSString, cost: Self.memoryCost(of: image))
   }
 
   public static let defaultFetcher: ThumbnailFetcher = { url in
@@ -141,11 +183,12 @@ public actor ThumbnailCache {
     if let hit = memory.object(forKey: request.sha256 as NSString) {
       return hit
     }
-    if let image = Self.decode(fileURL(for: request)) {
-      memory.setObject(image, forKey: request.sha256 as NSString)
-      return image
-    }
-    return nil
+    let url = fileURL(for: request)
+    guard FileManager.default.fileExists(atPath: url.path),
+      let image = await decodePool.run({ Self.decode(url) })
+    else { return nil }
+    remember(image, for: request.sha256)
+    return image
   }
 
   /// A synchronous peek at the in-memory layer only. A cell
@@ -207,7 +250,7 @@ public actor ThumbnailCache {
   public func store(data: Data, for request: ThumbnailRequest) -> CGImage? {
     guard let image = Self.thumbnail(from: data) else { return nil }
     writeAtomically(image, for: request)
-    memory.setObject(image, forKey: request.sha256 as NSString)
+    remember(image, for: request.sha256)
     return image
   }
 
@@ -238,8 +281,12 @@ public actor ThumbnailCache {
 
   private func keep(_ info: RemoteImageInfo, for request: ThumbnailRequest) {
     infos[request.sha256] = info
+    Self.writeInfo(info, to: infoURL(for: request))
+  }
+
+  private nonisolated static func writeInfo(_ info: RemoteImageInfo, to url: URL) {
     if let json = try? JSONEncoder().encode(info) {
-      try? json.write(to: infoURL(for: request), options: .atomic)
+      try? json.write(to: url, options: .atomic)
     }
   }
 
@@ -247,23 +294,29 @@ public actor ThumbnailCache {
     if let cached = await cachedImage(for: request) {
       return ThumbnailLoad(image: cached, info: keepingInfo ? cachedInfo(for: request) : nil)
     }
-    await acquireSlot()
-    defer { releaseSlot() }
-    if let raced = await cachedImage(for: request) {
-      return ThumbnailLoad(image: raced, info: keepingInfo ? cachedInfo(for: request) : nil)
+    let data: Data
+    do {
+      await acquireSlot()
+      defer { releaseSlot() }
+      if let raced = await cachedImage(for: request) {
+        return ThumbnailLoad(image: raced, info: keepingInfo ? cachedInfo(for: request) : nil)
+      }
+      data = try await fetcher(request.sourceURL)
     }
-    let data = try await fetcher(request.sourceURL)
-    guard let image = Self.thumbnail(from: data) else {
-      return nil
+    // The slot is back in the pool; everything below is ImageIO and disk.
+    let destination = fileURL(for: request)
+    let infoDestination = infoURL(for: request)
+    let made: (image: CGImage, info: RemoteImageInfo?)? = await decodePool.run {
+      guard let image = Self.thumbnail(from: data) else { return nil }
+      Self.writeAtomically(image, to: destination)
+      guard keepingInfo, let info = RemoteImageInfo.read(data) else { return (image, nil) }
+      Self.writeInfo(info, to: infoDestination)
+      return (image, info)
     }
-    writeAtomically(image, for: request)
-    memory.setObject(image, forKey: request.sha256 as NSString)
-    var info: RemoteImageInfo?
-    if keepingInfo, let read = RemoteImageInfo.read(data) {
-      info = read
-      keep(read, for: request)
-    }
-    return ThumbnailLoad(image: image, info: info)
+    guard let made else { return nil }
+    remember(made.image, for: request.sha256)
+    if let info = made.info { infos[request.sha256] = info }
+    return ThumbnailLoad(image: made.image, info: made.info)
   }
 
   /// The slot count is the number of holders; a queued caller receives its slot
@@ -325,12 +378,15 @@ public actor ThumbnailCache {
     guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else {
       return nil
     }
-    return CGImageSourceCreateImageAtIndex(source, 0, nil)
+    let options: [CFString: Any] = [kCGImageSourceShouldCacheImmediately: true]
+    return CGImageSourceCreateImageAtIndex(source, 0, options as CFDictionary)
   }
 
-  /// Decodes a downscaled thumbnail from arbitrary image bytes. Both flags are
-  /// load-bearing: without `…FromImageAlways` ImageIO prefers the often-stale EXIF
-  /// thumbnail, and without `…WithTransform` portrait photos render sideways.
+  /// Decodes a downscaled thumbnail from arbitrary image bytes. Both transform
+  /// flags are load-bearing: without `…FromImageAlways` ImageIO prefers the
+  /// often-stale EXIF thumbnail, and without `…WithTransform` portrait photos
+  /// render sideways. `…CacheImmediately` decodes the pixels here, off the
+  /// main thread, instead of at the first draw.
   public static func thumbnail(from data: Data) -> CGImage? {
     guard let source = CGImageSourceCreateWithData(data as CFData, nil) else {
       return nil
@@ -339,7 +395,59 @@ public actor ThumbnailCache {
       kCGImageSourceCreateThumbnailFromImageAlways: true,
       kCGImageSourceThumbnailMaxPixelSize: maxPixelSize,
       kCGImageSourceCreateThumbnailWithTransform: true,
+      kCGImageSourceShouldCacheImmediately: true,
     ]
     return CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
+  }
+}
+
+/// Runs ImageIO jobs on a private dispatch queue, at most `limit` at a time.
+/// Decoding blocks a thread for its whole run, so it stays off both the
+/// cache's actor and Swift's cooperative pool; a queued job receives its
+/// place by hand-off, as the download slots do.
+actor ThumbnailDecodePool {
+  nonisolated let limit: Int
+  private nonisolated let queue = DispatchQueue(
+    label: "PinaxUI.ThumbnailDecodePool", qos: .userInitiated, attributes: .concurrent)
+  private nonisolated let beforeWork: (@Sendable () -> Void)?
+  private(set) var running = 0
+  private var waiting: [CheckedContinuation<Void, Never>] = []
+
+  init(limit: Int, beforeWork: (@Sendable () -> Void)? = nil) {
+    self.limit = max(1, limit)
+    self.beforeWork = beforeWork
+  }
+
+  /// Jobs waiting for a place.
+  var queued: Int { waiting.count }
+
+  nonisolated func run<T: Sendable>(_ work: @escaping @Sendable () -> T) async -> T {
+    await acquire()
+    let result = await withCheckedContinuation { (continuation: CheckedContinuation<T, Never>) in
+      queue.async { [beforeWork] in
+        beforeWork?()
+        continuation.resume(returning: work())
+      }
+    }
+    await release()
+    return result
+  }
+
+  private func acquire() async {
+    if running < limit {
+      running += 1
+      return
+    }
+    await withCheckedContinuation { continuation in
+      waiting.append(continuation)
+    }
+  }
+
+  private func release() {
+    if waiting.isEmpty {
+      running -= 1
+    } else {
+      waiting.removeFirst().resume()
+    }
   }
 }
