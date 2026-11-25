@@ -38,9 +38,9 @@ public struct UsageScanBackend: Sendable {
   }
 }
 
-/// Reads a project's source folders and produces the
-/// usage document `CatalogUsage.sync` ingests. Only reads; never writes
-/// inside a source folder. Any missing folder or unreadable file fails the
+/// Reads a project's sources and produces the usage document
+/// `CatalogUsage.sync` ingests. Only reads; never writes inside a source
+/// folder. Any missing folder, unreadable file or failed command fails the
 /// whole scan, so an incomplete scan never replaces a complete one.
 public enum UsageScanner {
   /// Files larger than this are skipped.
@@ -55,9 +55,13 @@ public enum UsageScanner {
   /// Scans the project's sources against every backend's current and
   /// retired prefixes.
   /// `progress` gets the running count of files read, after each one.
+  /// Command sources run only when `commands` allows them; by default none
+  /// is, and a project that has one fails with `commandNotAllowed`.
   public static func scan(
     project slug: String,
     in database: CatalogDatabasePool,
+    commands: CommandSourcePolicy = .deny,
+    runner: CommandSourceRunning = ShellCommandRunner(),
     progress: (@Sendable (Int) -> Void)? = nil
   ) throws -> UsageScanResult {
     let (settings, backends) = try database.read { db in
@@ -75,21 +79,44 @@ public enum UsageScanner {
       return (ProjectSettings(meta: project.meta), backends)
     }
     return try scan(
-      project: slug, sources: settings.sources, backends: backends, progress: progress)
+      project: slug, sources: settings.sources, backends: backends, commands: commands,
+      runner: runner, progress: progress)
   }
 
   public static func scan(
     project slug: String,
     sources: [ProjectSource],
     backends: [UsageScanBackend],
+    commands: CommandSourcePolicy = .deny,
+    runner: CommandSourceRunning = ShellCommandRunner(),
     progress: (@Sendable (Int) -> Void)? = nil
   ) throws -> UsageScanResult {
     guard !sources.isEmpty else { throw UsageScanError.noSources(slug) }
+    // Asked before anything is read or run, so one command that is not
+    // allowed keeps the others from running too.
+    for source in sources where source.kind == .command && !commands.allows(source) {
+      throw CommandSourceError.commandNotAllowed(label: source.label)
+    }
     var references = Set<UsageReference.Identity>()
     var files = 0
     var skipped = 0
     var revisions: [String] = []
     for source in sources {
+      if source.kind == .command {
+        let output = try commandOutput(
+          of: source, project: slug, backends: backends, runner: runner)
+        let prefix = source.label + "/"
+        for item in output.references where keeps(item.rawURL, backends: backends) {
+          references.insert(
+            UsageReference.Identity(
+              sourceReference: prefix + item.sourceReference.precomposedStringWithCanonicalMapping,
+              rawURL: item.rawURL, kind: item.kind))
+        }
+        if let revision = output.sourceRevision {
+          revisions.append("\(source.label):\(revision)")
+        }
+        continue
+      }
       let root = URL(fileURLWithPath: source.path, isDirectory: true)
       var isDirectory: ObjCBool = false
       guard FileManager.default.fileExists(atPath: root.path, isDirectory: &isDirectory),
@@ -124,7 +151,8 @@ public enum UsageScanner {
       ($0.sourceReference, $0.rawURL, $0.kind) < ($1.sourceReference, $1.rawURL, $1.kind)
     }.map { UsageReference(rawURL: $0.rawURL, sourceReference: $0.sourceReference, kind: $0.kind) }
     let coverage = sources.flatMap { source in
-      source.effectiveInclude.map { "\(source.label)/\($0)" }
+      source.kind == .command
+        ? ["\(source.label)/*"] : source.effectiveInclude.map { "\(source.label)/\($0)" }
     }
     return UsageScanResult(
       document: UsageDocument(
@@ -134,6 +162,31 @@ public enum UsageScanner {
         refs: refs),
       files: files,
       skipped: skipped)
+  }
+
+  // MARK: - Commands
+
+  /// Every backend's current and retired prefixes, once each.
+  static func urlPrefixes(_ backends: [UsageScanBackend]) -> [String] {
+    var seen = Set<String>()
+    return backends.flatMap { [$0.backend.urlPrefix] + $0.retiredPrefixes }
+      .filter { seen.insert($0).inserted }
+  }
+
+  private static func commandOutput(
+    of source: ProjectSource, project: String, backends: [UsageScanBackend],
+    runner: CommandSourceRunning
+  ) throws -> CommandSourceOutput {
+    let data = try runner.run(
+      CommandSourceRequest(
+        label: source.label, command: source.command,
+        workingDirectory: source.workingDirectory,
+        environment: [
+          "PINAX_PROJECT": project,
+          "PINAX_SOURCE": source.label,
+          "PINAX_URL_PREFIXES": urlPrefixes(backends).joined(separator: "\n"),
+        ]))
+    return try CommandSourceOutput.parse(data, label: source.label, project: project)
   }
 
   // MARK: - Walking

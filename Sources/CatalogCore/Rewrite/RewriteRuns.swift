@@ -200,6 +200,8 @@ public enum RewriteRuns {
   /// `project/label`. Refusals (no finished preview `baseID`, files changed
   /// since the preview, unclean sources not allowed) throw before a run is
   /// recorded and before anything is written.
+  /// `commands` is what the rescan after writing may run; by default no
+  /// command source, and such a project's rescan is logged as failed.
   /// `beforeWriting` runs once every check has passed, after the run is
   /// recorded and before the first file is written; its events are logged
   /// and an error it throws fails the run with nothing written.
@@ -220,6 +222,8 @@ public enum RewriteRuns {
     git: GitStatusProviding = GitStatusProvider(),
     backupRoot: URL = RewriteApplier.defaultBackupRoot(),
     processExists: (Int32) -> Bool = RunLog.processExists,
+    commands: CommandSourcePolicy = .deny,
+    runner: CommandSourceRunning = ShellCommandRunner(),
     beforeWriting: (() throws -> [RunEvent])? = nil,
     phase: (@Sendable (RewriteApplyPhase) -> Void)? = nil
   ) throws -> RewriteApplyResult {
@@ -289,7 +293,9 @@ public enum RewriteRuns {
       phase?(.rewriting(files: plans.reduce(0) { $0 + $1.files.count { $0.newContent != nil } }))
       let written = try write(
         plans, allowedSources: allowedSources, backupRoot: backupRoot, runID: runID, git: git, log: &log)
-      try rescan(written.rescanned, database: database, log: &log, phase: phase)
+      try rescan(
+        written.rescanned, database: database, commands: commands, runner: runner, log: &log,
+        phase: phase)
       var summary = planSummary(plans)
       written.fill(&summary)
       summary.errors = log.errors
@@ -423,13 +429,15 @@ public enum RewriteRuns {
 
   /// Rescans the projects by the same path as `pinax usage scan`.
   static func rescan(
-    _ projects: [String], database: CatalogDatabasePool, log: inout EventSink,
+    _ projects: [String], database: CatalogDatabasePool, commands: CommandSourcePolicy,
+    runner: CommandSourceRunning, log: inout EventSink,
     phase: (@Sendable (RewriteApplyPhase) -> Void)? = nil
   ) throws {
     for project in projects {
       phase?(.rescanning(project: project))
       do {
-        let scan = try UsageScanner.scan(project: project, in: database)
+        let scan = try UsageScanner.scan(
+          project: project, in: database, commands: commands, runner: runner)
         let sync = try CatalogUsage.sync(scan.document, project: project, in: database)
         try log.write(.rescanFinished(RescanFinishedEvent(project: project, refs: sync.foundCount, files: scan.files)))
       } catch {

@@ -151,6 +151,8 @@ public enum DomainMigration {
     git: GitStatusProviding = GitStatusProvider(),
     backupRoot: URL = RewriteApplier.defaultBackupRoot(),
     processExists: (Int32) -> Bool = RunLog.processExists,
+    commands: CommandSourcePolicy = .deny,
+    runner: CommandSourceRunning = ShellCommandRunner(),
     phase: (@Sendable (RewriteApplyPhase) -> Void)? = nil
   ) throws -> RewriteApplyResult {
     guard let base = try RunLog.run(baseID, in: database, processExists: processExists) else {
@@ -187,8 +189,8 @@ public enum DomainMigration {
       }
     return try RewriteRuns.apply(
       fromRun: baseID, allowedSources: allowedSources, kind: .domainMigrate, database: database,
-      git: git, backupRoot: backupRoot, processExists: processExists, beforeWriting: changePrefix,
-      phase: phase)
+      git: git, backupRoot: backupRoot, processExists: processExists, commands: commands,
+      runner: runner, beforeWriting: changePrefix, phase: phase)
   }
 
   /// Trimmed, without trailing slashes — as `addOldDomain` stores it.

@@ -6,15 +6,18 @@ public struct ProjectSettings: Equatable, Sendable {
   public var sources: [ProjectSource]
   public var usageTracking: UsageTracking
   public var compression: ProjectCompression
+  public var autoScan: ProjectAutoScan
 
   public init(
     sources: [ProjectSource] = [],
     usageTracking: UsageTracking = .tracked,
-    compression: ProjectCompression = ProjectCompression()
+    compression: ProjectCompression = ProjectCompression(),
+    autoScan: ProjectAutoScan = .off
   ) {
     self.sources = sources
     self.usageTracking = usageTracking
     self.compression = compression
+    self.autoScan = autoScan
   }
 
   /// At most this many sources per project.
@@ -35,6 +38,9 @@ public struct ProjectSettings: Equatable, Sendable {
     }
     if let value = object["compression"] {
       compression = ProjectCompression(json: value)
+    }
+    if let value = object["autoScan"].flatMap(ProjectAutoScan.init(json:)) {
+      autoScan = value
     }
   }
 
@@ -112,20 +118,90 @@ public enum UsageTracking: String, Equatable, Sendable, Codable {
   case notTracked
 }
 
-public struct ProjectSource: Equatable, Sendable, Codable {
-  public var label: String
-  /// Absolute, standardized, local to this machine.
-  public var path: String
-  /// Empty means `defaultInclude`.
-  public var include: [String]
-  public var exclude: [String]
+/// When a project is rescanned without being asked. Both are off unless set.
+public struct ProjectAutoScan: Equatable, Sendable {
+  public enum Schedule: String, Equatable, Sendable, CaseIterable {
+    case off
+    case hourly
+    case daily
+  }
 
+  /// Rescan when something changes in the project's source folders.
+  public var watch: Bool
+  public var schedule: Schedule
+
+  public init(watch: Bool = false, schedule: Schedule = .off) {
+    self.watch = watch
+    self.schedule = schedule
+  }
+
+  public static let off = ProjectAutoScan()
+
+  /// Nil unless both values are there and readable.
+  init?(json: Any) {
+    guard let object = json as? [String: Any],
+      let watch = object["watch"] as? NSNumber, CFGetTypeID(watch) == CFBooleanGetTypeID(),
+      let raw = object["schedule"] as? String, let schedule = Schedule(rawValue: raw)
+    else { return nil }
+    self.init(watch: watch.boolValue, schedule: schedule)
+  }
+
+  var json: [String: Any] {
+    ["watch": watch, "schedule": schedule.rawValue]
+  }
+}
+
+/// A place a project's usage scan reads references from: a folder of files,
+/// or a command whose output lists them.
+public struct ProjectSource: Equatable, Sendable, Codable {
+  public enum Kind: String, Equatable, Sendable, Codable {
+    case folder
+    case command
+  }
+
+  public var kind: Kind
+  public var label: String
+  /// A folder source's folder: absolute, standardized, local to this
+  /// machine. Empty for a command source.
+  public var path: String
+  /// Empty means `defaultInclude`. Folder sources only.
+  public var include: [String]
+  /// Folder sources only.
+  public var exclude: [String]
+  /// A command source's shell command line. Empty for a folder source.
+  public var command: String
+  /// The folder the command runs in: absolute, standardized. Empty for a
+  /// folder source.
+  public var workingDirectory: String
+
+  /// A folder source.
   public init(label: String, path: String, include: [String] = [], exclude: [String] = []) {
+    self.kind = .folder
     self.label = label
     self.path = path
     self.include = include
     self.exclude = exclude
+    self.command = ""
+    self.workingDirectory = ""
   }
+
+  /// A command source.
+  public init(label: String, command: String, workingDirectory: String) {
+    self.kind = .command
+    self.label = label
+    self.path = ""
+    self.include = []
+    self.exclude = []
+    self.command = command
+    self.workingDirectory = workingDirectory
+  }
+
+  /// The folder on this machine the source needs: the one it scans, or the
+  /// one its command runs in.
+  public var directory: String { kind == .command ? workingDirectory : path }
+
+  /// The longest command a command source may hold.
+  public static let maximumCommandLength = 4096
 
   /// What an empty or missing `include` scans.
   public static let defaultInclude = [
@@ -165,18 +241,80 @@ public struct ProjectSource: Equatable, Sendable, Codable {
   private static let labelCharacters = CharacterSet(
     charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-")
 
+  /// Nil for a kind this version does not know.
   init?(json: Any) {
     guard let object = json as? [String: Any],
-      let label = object["label"] as? String,
-      let path = object["path"] as? String
+      let label = object["label"] as? String
     else { return nil }
+    var kind = Kind.folder
+    if let value = object["kind"] {
+      guard let known = (value as? String).flatMap(Kind.init(rawValue:)) else { return nil }
+      kind = known
+    }
+    if kind == .command {
+      guard let command = object["command"] as? String,
+        let workingDirectory = object["workingDirectory"] as? String
+      else { return nil }
+      self.init(label: label, command: command, workingDirectory: workingDirectory)
+      return
+    }
+    guard let path = object["path"] as? String else { return nil }
     let include = object["include"] ?? [String]()
     let exclude = object["exclude"] ?? [String]()
     guard let include = include as? [String], let exclude = exclude as? [String] else { return nil }
     self.init(label: label, path: path, include: include, exclude: exclude)
   }
 
+  /// A folder source is stored without a `kind`.
   var json: [String: Any] {
-    ["label": label, "path": path, "include": include, "exclude": exclude]
+    switch kind {
+    case .folder:
+      return ["label": label, "path": path, "include": include, "exclude": exclude]
+    case .command:
+      return [
+        "kind": kind.rawValue, "label": label, "command": command,
+        "workingDirectory": workingDirectory,
+      ]
+    }
+  }
+
+  // MARK: Codable, the shape `pinax project source ls --format json` prints
+
+  private enum CodingKeys: String, CodingKey {
+    case kind, label, path, include, exclude, command
+    case workingDirectory = "working_directory"
+  }
+
+  public init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    let label = try container.decode(String.self, forKey: .label)
+    switch try container.decodeIfPresent(Kind.self, forKey: .kind) ?? .folder {
+    case .folder:
+      self.init(
+        label: label,
+        path: try container.decode(String.self, forKey: .path),
+        include: try container.decode([String].self, forKey: .include),
+        exclude: try container.decode([String].self, forKey: .exclude))
+    case .command:
+      self.init(
+        label: label,
+        command: try container.decode(String.self, forKey: .command),
+        workingDirectory: try container.decode(String.self, forKey: .workingDirectory))
+    }
+  }
+
+  public func encode(to encoder: Encoder) throws {
+    var container = encoder.container(keyedBy: CodingKeys.self)
+    try container.encode(label, forKey: .label)
+    switch kind {
+    case .folder:
+      try container.encode(path, forKey: .path)
+      try container.encode(include, forKey: .include)
+      try container.encode(exclude, forKey: .exclude)
+    case .command:
+      try container.encode(kind, forKey: .kind)
+      try container.encode(command, forKey: .command)
+      try container.encode(workingDirectory, forKey: .workingDirectory)
+    }
   }
 }
