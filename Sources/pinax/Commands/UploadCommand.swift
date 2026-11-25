@@ -96,7 +96,7 @@ struct UploadCommand: AsyncParsableCommand {
     } else if backends.count == 1, let match = backends.first {
       selectedBackend = match
     } else if backends.isEmpty {
-      throw ValidationError("No backends are configured.")
+      throw CLIError.notFound("No backends are configured.")
     } else {
       let available = backends.map(\.slug).joined(separator: ", ")
       throw ValidationError("Specify --backend. Available backends: \(available).")
@@ -107,7 +107,7 @@ struct UploadCommand: AsyncParsableCommand {
       uploader = nil
     } else {
       guard let credentials = try Keychain().load(for: selectedBackend.keychainRef) else {
-        throw ValidationError(credentialMissingMessage(for: selectedBackend))
+        throw CLIError.credentials(credentialMissingMessage(for: selectedBackend))
       }
       uploader = S3Uploader(backend: selectedBackend, credentials: credentials)
     }
@@ -137,14 +137,14 @@ struct UploadCommand: AsyncParsableCommand {
         try copyToPasteboard(output)
       }
     }
-    var failed = false
+    var failures: [Error] = []
     for attempt in attempts {
       guard case let .failure(error) = attempt.result else { continue }
-      failed = true
+      failures.append(error)
       writeError("\(attempt.url.path): \(error)")
     }
-    if failed {
-      throw ExitCode.failure
+    if !failures.isEmpty {
+      throw ExitCode(CLIExit.code(forAll: failures))
     }
   }
 
@@ -195,7 +195,7 @@ struct UploadCommand: AsyncParsableCommand {
       guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory),
         !isDirectory.boolValue
       else {
-        throw ValidationError("File does not exist: \(url.path)")
+        throw CLIError.notFound("File does not exist: \(url.path)")
       }
     }
   }
@@ -235,9 +235,9 @@ struct UploadCommand: AsyncParsableCommand {
         try data.write(to: fileURL, options: .atomic)
         return UploadInputs(urls: [fileURL], temporaryFiles: [directory])
       }
-      throw ValidationError("The pasteboard does not contain PNG, TIFF, or image file URLs.")
+      throw CLIError.notFound("The pasteboard does not contain PNG, TIFF, or image file URLs.")
     #else
-      throw ValidationError("Clipboard upload requires AppKit.")
+      throw CLIError.failure("Clipboard upload requires AppKit.")
     #endif
   }
 
@@ -258,10 +258,10 @@ struct UploadCommand: AsyncParsableCommand {
       let pasteboard = NSPasteboard.general
       pasteboard.clearContents()
       guard pasteboard.setString(value, forType: .string) else {
-        throw ValidationError("Could not write the upload output to the pasteboard.")
+        throw CLIError.failure("Could not write the upload output to the pasteboard.")
       }
     #else
-      throw ValidationError("Copying output requires AppKit.")
+      throw CLIError.failure("Copying output requires AppKit.")
     #endif
   }
 }

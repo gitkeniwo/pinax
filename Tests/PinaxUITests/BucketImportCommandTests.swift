@@ -108,10 +108,11 @@ import Testing
     do {
       _ = try reindexCredentials(for: Self.backend(keychainRef: ""))
       Issue.record("credentials resolved")
-    } catch let error as ValidationError {
+    } catch let error as CLIError {
       #expect(
-        error.message
+        error.description
           == "Backend 'r2' was registered without credentials. Run: pinax backend set-credentials --slug r2")
+      #expect(error.exitCode == 78)
     }
   }
 

@@ -48,7 +48,7 @@ struct ImportBucketCommand: AsyncParsableCommand {
         throw error
       }
       FileHandle.standardError.write(Data("Error: \(message)\n".utf8))
-      throw ExitCode.failure
+      throw ExitCode(CLIExit.code(for: error) ?? CLIExit.failure)
     }
     for warning in ExternalsImportCommand.warnings(result.cdnCheck) {
       FileHandle.standardError.write(Data("WARN\t\(warning)\n".utf8))
