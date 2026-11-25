@@ -149,6 +149,21 @@ public final class GalleryModel: ObservableObject {
     /// this cell sits under, and the image's first line in it.
     public var usageSection: UsageRowSection?
 
+    // What a cell shows, worked out once from `item` (which never changes)
+    // so drawing a cell formats nothing.
+    /// Where the asset came from, parsed from its meta.
+    public let source: AssetSource
+    /// The upload day, as the cell's date line writes it.
+    public let dayText: String
+    /// The upload month, `yyyy-MM`: the grid's month-section key.
+    public let monthKey: String
+    /// The byte size, as a file size.
+    public let sizeText: String
+    /// The short file kind ("PNG", "JPEG", …).
+    public let formatText: String
+    /// "width × height", or nil when the catalog has no dimensions.
+    public let dimensionsText: String?
+
     public init(_ item: CatalogAssetItem) {
       self.init(item, tags: [])
     }
@@ -158,6 +173,12 @@ public final class GalleryModel: ObservableObject {
     init(reference: UsageReferenceRow, under parent: Row, index: Int) {
       self.id = -(parent.id << 16 | Int64(index + 1))
       self.item = parent.item
+      self.source = parent.source
+      self.dayText = parent.dayText
+      self.monthKey = parent.monthKey
+      self.sizeText = parent.sizeText
+      self.formatText = parent.formatText
+      self.dimensionsText = parent.dimensionsText
       self.tags = []
       self.isFavorite = false
       self.labels = []
@@ -169,6 +190,12 @@ public final class GalleryModel: ObservableObject {
     init(repeatOf parent: Row, index: Int) {
       self.id = -(parent.id << 32 | Int64(index + 1))
       self.item = parent.item
+      self.source = parent.source
+      self.dayText = parent.dayText
+      self.monthKey = parent.monthKey
+      self.sizeText = parent.sizeText
+      self.formatText = parent.formatText
+      self.dimensionsText = parent.dimensionsText
       self.tags = []
       self.isFavorite = false
       self.labels = []
@@ -183,12 +210,24 @@ public final class GalleryModel: ObservableObject {
       return references.enumerated().map { Row(reference: $1, under: self, index: $0) }
     }
 
+    /// `locale` exists for the tests; call sites omit it.
     public init(
       _ item: CatalogAssetItem, tags: [String], isFavorite: Bool = false,
-      labels: [AssetLabel] = []
+      labels: [AssetLabel] = [], locale: Locale = .current
     ) {
       self.id = item.asset.id ?? 0
       self.item = item
+      let asset = item.asset
+      self.source = AssetSource.of(meta: asset.meta)
+      self.dayText = PinaxFormat.date(asset.uploadedAt, style: .day, locale: locale)
+      self.monthKey = String(asset.uploadedAt.prefix(7))
+      self.sizeText = asset.byteSize.formatted(.byteCount(style: .file).locale(locale))
+      self.formatText = PinaxFormat.shortKind(mime: asset.mime)
+      if let width = asset.width, let height = asset.height {
+        self.dimensionsText = "\(width) × \(height)"
+      } else {
+        self.dimensionsText = nil
+      }
       self.tags = tags
       self.isFavorite = isFavorite
       self.labels = labels
@@ -346,7 +385,9 @@ public final class GalleryModel: ObservableObject {
   /// place's rows. An asset reload moves it when its rows arrive (a
   /// superseded or failed one never does); a report surface, which shows
   /// its own loading state, when its reload starts.
-  @Published public private(set) var shownPlace: NavigationHistory.Place
+  @Published public private(set) var shownPlace: NavigationHistory.Place {
+    didSet { groupingModeMayHaveChanged() }
+  }
   public var shownSelection: SidebarSelection { shownPlace.selection }
   /// A switch past this long without its rows shows the status
   /// bar's spinner; before it the old place stays, unmarked.
@@ -431,7 +472,11 @@ public final class GalleryModel: ObservableObject {
   @Published public var viewMode: ViewMode = .grid {
     // Usage ▸ Images' grid is cut by file, its table by
     // image; the rows follow the mode with no reload.
-    didSet { if oldValue != viewMode { showUsageImages() } }
+    didSet {
+      guard oldValue != viewMode else { return }
+      groupingModeMayHaveChanged()
+      showUsageImages()
+    }
   }
   /// The asset order, a query input (`makeQuery`, the reload
   /// token). The jump bar's sort menu and the table's column headers write
@@ -613,7 +658,9 @@ public final class GalleryModel: ObservableObject {
     ])
   }
 
-  @Published public private(set) var rows: [Row] = []
+  @Published public private(set) var rows: [Row] = [] {
+    didSet { rowsDidChange(from: oldValue) }
+  }
 
   /// The Library tab's shown shortcut sections.
   /// Mirrored both ways with `PreferencesStore.libraryShortcuts` by the
@@ -696,20 +743,60 @@ public final class GalleryModel: ObservableObject {
     monthTotals[month] ?? loaded
   }
 
-  public var groupedRows: [(month: String, rows: [Row])] {
-    var groups: [(month: String, rows: [Row])] = []
+  /// Stored, not computed on each read: cut again whenever `rows` or
+  /// the cut's mode (`showsUsageFileSections`) changes, in the same
+  /// synchronous step, so a reader never sees a stale cut. It needs no
+  /// publisher of its own — every change to it comes with one to `rows`,
+  /// `shownPlace`, `usagePage` or `viewMode`.
+  public private(set) var groupedRows: [(month: String, rows: [Row])] = []
+  /// Whether `groupedRows` was cut by Usage file (else by month).
+  private var groupedRowsByFile = false
+  /// How many times `groupedRows` has been cut from scratch — the tests'
+  /// proof that a change outside the cut does not redo it.
+  private(set) var groupedRowsCutCount = 0
+
+  static func groupKey(_ row: Row, byFile: Bool) -> String {
+    // Usage ▸ Images cuts by file instead (the key is the file's id).
+    byFile ? row.usageSection?.fileID ?? "" : row.monthKey
+  }
+
+  private func cutGroupedRows() {
+    groupedRowsCutCount += 1
     let byFile = showsUsageFileSections
+    groupedRowsByFile = byFile
+    var groups: [(month: String, rows: [Row])] = []
     for row in rows {
-      // Usage ▸ Images cuts by file instead (the key is the file's id).
-      let month =
-        byFile ? row.usageSection?.fileID ?? "" : String(row.item.asset.uploadedAt.prefix(7))
-      if groups.last?.month == month {
+      let key = Self.groupKey(row, byFile: byFile)
+      if groups.last?.month == key {
         groups[groups.count - 1].rows.append(row)
       } else {
-        groups.append((month, [row]))
+        groups.append((key, [row]))
       }
     }
-    return groups
+    groupedRows = groups
+  }
+
+  /// The cut's mode inputs changed: cut again only if the mode did.
+  private func groupingModeMayHaveChanged() {
+    if showsUsageFileSections != groupedRowsByFile { cutGroupedRows() }
+  }
+
+  /// A change that keeps every row in place under the same key — a
+  /// favourite, a label — swaps the new rows into the existing sections
+  /// instead of cutting again.
+  private func rowsDidChange(from old: [Row]) {
+    let byFile = groupedRowsByFile
+    guard byFile == showsUsageFileSections, old.count == rows.count,
+      zip(old, rows).allSatisfy({
+        $0.id == $1.id && Self.groupKey($0, byFile: byFile) == Self.groupKey($1, byFile: byFile)
+      })
+    else { return cutGroupedRows() }
+    var offset = 0
+    for index in groupedRows.indices {
+      let count = groupedRows[index].rows.count
+      groupedRows[index].rows = Array(rows[offset..<offset + count])
+      offset += count
+    }
   }
   /// The status bar's counts, refreshed on the same reload
   /// as `rows` so the bar can never describe a stale surface. `totalCount`
@@ -766,7 +853,11 @@ public final class GalleryModel: ObservableObject {
   /// file's images there.
   /// Files is the page Usage opens on.
   @Published public var usagePage: UsagePage = .files {
-    didSet { if oldValue != usagePage { reloadUsageIfShown() } }
+    didSet {
+      guard oldValue != usagePage else { return }
+      groupingModeMayHaveChanged()
+      reloadUsageIfShown()
+    }
   }
   /// Only the references on an old domain.
   /// The Overview's numbers for the current project; nil
@@ -2384,9 +2475,12 @@ public final class GalleryModel: ObservableObject {
       await reload()
     default:
       let ids = Set(targetMembers.map(\.rowID))
-      for index in rows.indices where ids.contains(rows[index].id) {
-        change(&rows[index])
+      // One assignment, so the change publishes once.
+      var patched = rows
+      for index in patched.indices where ids.contains(patched[index].id) {
+        change(&patched[index])
       }
+      rows = patched
     }
   }
 
