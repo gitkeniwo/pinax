@@ -13,6 +13,8 @@ extension ExternalMigration {
   ///   - allowedSources: `project/label` of unclean sources that may be written.
   ///   - now: the upload date (`uploaded_at` and the key's month).
   ///   - cancellation: checked between images; never during the rewrite.
+  ///   - compression: whether each image is compressed before upload; by
+  ///     default as its target project says.
   public static func apply(
     fromRun baseID: Int64,
     allowedSources: Set<String>,
@@ -23,6 +25,7 @@ extension ExternalMigration {
     cacheRoot: URL = defaultCacheRoot(),
     backupRoot: URL = RewriteApplier.defaultBackupRoot(),
     now: Date = Date(),
+    compression: CompressionChoice = .project,
     cancellation: ExternalMigrationCancellation = ExternalMigrationCancellation(),
     progress: (@Sendable (ExternalMigrationProgress) -> Void)? = nil,
     processExists: (Int32) -> Bool = RunLog.processExists
@@ -146,12 +149,14 @@ extension ExternalMigration {
         let first = group.urls[0]
         let plan = planned[first]!
         let slug = plan.project ?? baseParams.targets.first { $0.urls.contains(first) }!.project
+        let project = projects[slug]!
         let pipeline = UploadPipeline(
-          database: database, uploader: uploader, backend: backend, project: migrationProject(projects[slug]!))
+          database: database, uploader: uploader, backend: backend, project: migrationProject(project))
         let outcome: UploadOutcome
         do {
           outcome = try await pipeline.upload(
-            fileURL: URL(fileURLWithPath: downloads[first]!.cachePath), date: now, sourceURL: first)
+            fileURL: URL(fileURLWithPath: downloads[first]!.cachePath), date: now, sourceURL: first,
+            compression: compression.options(for: project))
         } catch {
           let (isFatal, status) = uploadFailure(error)
           try log.write(.uploadFailed(UploadFailedEvent(

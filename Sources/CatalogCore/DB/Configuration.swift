@@ -400,6 +400,22 @@ public enum CatalogConfiguration {
     }
   }
 
+  /// Changes a project's upload compression, starting from what is stored
+  /// (or the default when nothing is), in one write transaction.
+  @discardableResult
+  public static func setCompression(
+    slug: String,
+    in database: DatabasePool,
+    now: Date = Date(),
+    _ change: (inout ProjectCompression) -> Void
+  ) throws -> ProjectSettings {
+    try updateProjectMeta(slug: slug, in: database, now: now) { object in
+      var compression = object["compression"].map(ProjectCompression.init(json:)) ?? ProjectCompression()
+      change(&compression)
+      object["compression"] = compression.json
+    }
+  }
+
   /// Read → change one key → write back, in one write transaction.
   private static func updateProjectMeta(
     slug: String,

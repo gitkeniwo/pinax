@@ -12,6 +12,8 @@ public struct PublicAsset: Codable, Equatable, Sendable {
   public let uploadedAt: String
   public let deduplicated: Bool?
   public let dryRun: Bool?
+  /// Present only for an upload whose stored bytes are a compressed copy.
+  public let compression: PublicCompression?
 
   public init(
     sha256: String,
@@ -24,7 +26,8 @@ public struct PublicAsset: Codable, Equatable, Sendable {
     filename: String,
     uploadedAt: String,
     deduplicated: Bool? = nil,
-    dryRun: Bool? = nil
+    dryRun: Bool? = nil,
+    compression: PublicCompression? = nil
   ) {
     self.sha256 = sha256
     self.key = key
@@ -37,6 +40,7 @@ public struct PublicAsset: Codable, Equatable, Sendable {
     self.uploadedAt = uploadedAt
     self.deduplicated = deduplicated
     self.dryRun = dryRun
+    self.compression = compression
   }
 
   public init(asset: Asset, backend: Backend) {
@@ -65,12 +69,13 @@ public struct PublicAsset: Codable, Equatable, Sendable {
       filename: upload.originalFilename,
       uploadedAt: upload.uploadedAt,
       deduplicated: upload.deduplicated,
-      dryRun: upload.dryRun
+      dryRun: upload.dryRun,
+      compression: upload.compression.map(PublicCompression.init(facts:))
     )
   }
 
   enum CodingKeys: String, CodingKey {
-    case sha256, key, url, width, height, bytes, mime, filename, deduplicated
+    case sha256, key, url, width, height, bytes, mime, filename, deduplicated, compression
     case uploadedAt = "uploaded_at"
     case dryRun = "dry_run"
   }
@@ -88,6 +93,46 @@ public struct PublicAsset: Codable, Equatable, Sendable {
     try container.encode(uploadedAt, forKey: .uploadedAt)
     try container.encodeIfPresent(deduplicated, forKey: .deduplicated)
     try container.encodeIfPresent(dryRun, forKey: .dryRun)
+    try container.encodeIfPresent(compression, forKey: .compression)
+  }
+}
+
+/// An upload's compression in the public JSON: the original it was made
+/// from and the options used.
+public struct PublicCompression: Codable, Equatable, Sendable {
+  public let sourceSHA256: String
+  public let sourceBytes: Int64
+  public let sourceWidth: Int?
+  public let sourceHeight: Int?
+  public let sourceMime: String
+  public let formatChanged: Bool
+  /// Absent when the image was not resized.
+  public let longestEdge: Int?
+  public let quality: CompressionQuality
+  public let removeMetadata: Bool
+
+  public init(facts: UploadCompressionFacts) {
+    sourceSHA256 = facts.sourceSHA256
+    sourceBytes = facts.sourceByteSize
+    sourceWidth = facts.sourceWidth
+    sourceHeight = facts.sourceHeight
+    sourceMime = facts.sourceMime
+    formatChanged = facts.formatChanged
+    longestEdge = facts.options.longestEdge
+    quality = facts.options.quality
+    removeMetadata = facts.options.removesMetadata
+  }
+
+  enum CodingKeys: String, CodingKey {
+    case quality
+    case sourceSHA256 = "source_sha256"
+    case sourceBytes = "source_bytes"
+    case sourceWidth = "source_width"
+    case sourceHeight = "source_height"
+    case sourceMime = "source_mime"
+    case formatChanged = "format_changed"
+    case longestEdge = "longest_edge"
+    case removeMetadata = "remove_metadata"
   }
 }
 

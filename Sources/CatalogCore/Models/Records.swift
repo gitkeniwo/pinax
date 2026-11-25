@@ -84,12 +84,17 @@ public struct Asset: Codable, FetchableRecord, MutablePersistableRecord, Sendabl
   public var uploadedAt: String
   public var createdAt: String
   public var updatedAt: String
+  /// The hash of the original file when the stored bytes are a recompressed
+  /// copy of it; nil for an uploaded original. `sha256` is always the hash
+  /// of the stored bytes. Backups made before the column existed decode as nil.
+  public var sourceSHA256: String?
 
   enum CodingKeys: String, CodingKey {
     case id, sha256, key, width, height, mime, state, pinned, note, meta
     case backendID = "backend_id"
     case byteSize = "byte_size"
     case originalFilename = "orig_filename"
+    case sourceSHA256 = "source_sha256"
     case uploadedAt = "uploaded_at"
     case createdAt = "created_at"
     case updatedAt = "updated_at"
@@ -99,7 +104,7 @@ public struct Asset: Codable, FetchableRecord, MutablePersistableRecord, Sendabl
     id: Int64? = nil, sha256: String, backendID: Int64, key: String, byteSize: Int64,
     width: Int? = nil, height: Int? = nil, mime: String, originalFilename: String? = nil,
     state: String = "active", pinned: Bool = false, note: String? = nil, meta: String = "{}",
-    uploadedAt: String, createdAt: String, updatedAt: String
+    uploadedAt: String, createdAt: String, updatedAt: String, sourceSHA256: String? = nil
   ) {
     self.id = id
     self.sha256 = sha256
@@ -117,6 +122,7 @@ public struct Asset: Codable, FetchableRecord, MutablePersistableRecord, Sendabl
     self.uploadedAt = uploadedAt
     self.createdAt = createdAt
     self.updatedAt = updatedAt
+    self.sourceSHA256 = sourceSHA256
   }
 }
 

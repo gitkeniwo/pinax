@@ -125,6 +125,14 @@ public enum CatalogReindex {
       for candidate in validCandidates {
         if knownHashes.contains(candidate.sha256) {
           existing += 1
+          // A compressed copy's original hash fills a row that lacks it.
+          if !dryRun, let sourceSHA256 = candidate.sourceSHA256 {
+            try db.execute(
+              sql: """
+                UPDATE asset SET source_sha256 = ?
+                WHERE backend_id = ? AND sha256 = ? AND source_sha256 IS NULL
+                """, arguments: [sourceSHA256, backendID, candidate.sha256])
+          }
           continue
         }
         if knownKeys[candidate.key] != nil {
@@ -145,7 +153,8 @@ public enum CatalogReindex {
           originalFilename: candidate.originalFilename,
           uploadedAt: candidate.uploadedAt ?? timestamp,
           createdAt: timestamp,
-          updatedAt: timestamp
+          updatedAt: timestamp,
+          sourceSHA256: candidate.sourceSHA256
         )
         try asset.insert(db)
       }
@@ -167,13 +176,11 @@ public enum CatalogReindex {
   ) throws -> CandidateResult {
     var missing: [String] = []
     let sha256 = head.metadata["sha256"]
-    if sha256?.count != 64
-      || sha256?.unicodeScalars.allSatisfy({
-        (48...57).contains($0.value) || (97...102).contains($0.value)
-      }) != true
-    {
+    if !isHexDigest(sha256) {
       missing.append("sha256")
     }
+    // Optional: only compressed copies carry it, and a bad value is ignored.
+    let sourceSHA256 = head.metadata["source-sha256"].flatMap { isHexDigest($0) ? $0 : nil }
     let originalFilename: String?
     if let encodedFilename = head.metadata["orig-filename"], !encodedFilename.isEmpty {
       originalFilename = try? MetadataValueCodec.decode(encodedFilename)
@@ -214,8 +221,17 @@ public enum CatalogReindex {
         mime: mime,
         originalFilename: originalFilename,
         uploadedAt: normalizedTimestamp(summary.lastModified)
-          ?? normalizedTimestamp(head.lastModified)
+          ?? normalizedTimestamp(head.lastModified),
+        sourceSHA256: sourceSHA256
       ))
+  }
+
+  /// 64 lowercase hex digits.
+  private static func isHexDigest(_ value: String?) -> Bool {
+    value?.count == 64
+      && value?.unicodeScalars.allSatisfy({
+        (48...57).contains($0.value) || (97...102).contains($0.value)
+      }) == true
   }
 
   private static func normalizedTimestamp(_ value: String?) -> String? {
@@ -260,4 +276,5 @@ private struct ReindexCandidate {
   let mime: String
   let originalFilename: String
   let uploadedAt: String?
+  let sourceSHA256: String?
 }

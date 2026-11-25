@@ -47,6 +47,14 @@ struct UploadCommand: AsyncParsableCommand {
   @Flag(name: .long, help: "Upload even when the catalog already contains the content.")
   var force = false
 
+  @Flag(
+    inversion: .prefixedNo,
+    help: """
+      Compress the uploaded copy, or upload the original. Default: as the project says; \
+      without a project, the original. The files on disk are never changed.
+      """)
+  var compress: Bool?
+
   mutating func run() async throws {
     guard clipboard || !paths.isEmpty else {
       throw ValidationError("Provide at least one path or use --clipboard.")
@@ -109,7 +117,8 @@ struct UploadCommand: AsyncParsableCommand {
       backend: selectedBackend,
       project: selectedProject
     )
-    let attempts = await uploadAll(inputs.urls, with: pipeline)
+    let attempts = await uploadAll(
+      inputs.urls, with: pipeline, compression: compressionOptions(for: selectedProject))
     let outcomes = attempts.compactMap { attempt -> UploadOutcome? in
       guard case let .success(outcome) = attempt.result else { return nil }
       return outcome
@@ -139,9 +148,14 @@ struct UploadCommand: AsyncParsableCommand {
     }
   }
 
-  private func uploadAll(_ urls: [URL], with pipeline: UploadPipeline) async
-    -> [UploadAttempt]
-  {
+  /// The options each upload is compressed with, or nil for originals.
+  func compressionOptions(for project: Project?) -> CompressionOptions? {
+    CompressionChoice(flag: compress).options(for: project)
+  }
+
+  private func uploadAll(
+    _ urls: [URL], with pipeline: UploadPipeline, compression: CompressionOptions?
+  ) async -> [UploadAttempt] {
     var results = [UploadAttempt?](repeating: nil, count: urls.count)
     return await withTaskGroup(of: UploadAttempt.self) { group in
       var nextIndex = 0
@@ -151,7 +165,8 @@ struct UploadCommand: AsyncParsableCommand {
             let outcome = try await pipeline.upload(
               fileURL: urls[index],
               force: force,
-              dryRun: dryRun
+              dryRun: dryRun,
+              compression: compression
             )
             return UploadAttempt(index: index, url: urls[index], result: .success(outcome))
           } catch {
@@ -248,6 +263,17 @@ struct UploadCommand: AsyncParsableCommand {
     #else
       throw ValidationError("Copying output requires AppKit.")
     #endif
+  }
+}
+
+extension CompressionChoice {
+  /// `--compress` / `--no-compress`, or neither.
+  init(flag: Bool?) {
+    switch flag {
+    case true?: self = .on
+    case false?: self = .off
+    case nil: self = .project
+    }
   }
 }
 

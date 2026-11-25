@@ -231,11 +231,29 @@ struct ProjectSet: ParsableCommand {
   var keyTemplate: String?
   @Flag(help: "Go back to the default key template.")
   var resetKeyTemplate = false
+  @Flag(
+    inversion: .prefixedNo,
+    help: "Compress the uploaded copy of this project's images. The files on disk are never changed.")
+  var compress: Bool?
+  @Option(help: "Longest edge of a compressed copy in pixels, or none to keep the size.")
+  var longestEdge: LongestEdgeArgument?
+  @Option(help: "Quality of a compressed copy: high, medium or small.")
+  var quality: QualityArgument?
+  @Flag(help: "Whether a compressed copy drops the original's metadata, location included.")
+  var metadata: MetadataArgument?
 
   func validate() throws {
     if keyTemplate != nil, resetKeyTemplate {
       throw ValidationError("Give --key-template or --reset-key-template, not both.")
     }
+  }
+
+  private var changesCompression: Bool {
+    compress != nil || longestEdge != nil || quality != nil || metadata != nil
+  }
+
+  private var changesProject: Bool {
+    name != nil || keyPrefix != nil || backend != nil || keyTemplate != nil || resetKeyTemplate
   }
 
   mutating func run() throws {
@@ -245,18 +263,61 @@ struct ProjectSet: ParsableCommand {
   }
 
   func perform(in database: CatalogDatabasePool) throws -> (output: String, warnings: [String]) {
-    let change: KeyTemplateChange =
-      resetKeyTemplate ? .reset : keyTemplate.map { .set($0) } ?? .unchanged
-    let project = try CatalogConfiguration.setProject(
-      slug: slug,
-      name: name,
-      keyPrefix: keyPrefix,
-      backendSlug: backend,
-      keyTemplate: change,
-      in: database
-    )
-    return (project.slug, keyTemplateWarnings(for: project))
+    // Compression alone is a change too; with nothing at all given,
+    // setProject reports that nothing changed. The project's own fields go
+    // first, so a refused change leaves compression as it was.
+    var warnings: [String] = []
+    if changesProject || !changesCompression {
+      let change: KeyTemplateChange =
+        resetKeyTemplate ? .reset : keyTemplate.map { .set($0) } ?? .unchanged
+      let project = try CatalogConfiguration.setProject(
+        slug: slug,
+        name: name,
+        keyPrefix: keyPrefix,
+        backendSlug: backend,
+        keyTemplate: change,
+        in: database
+      )
+      warnings = keyTemplateWarnings(for: project)
+    }
+    if changesCompression {
+      try CatalogConfiguration.setCompression(slug: slug, in: database) { compression in
+        if let compress { compression.isEnabled = compress }
+        if let longestEdge { compression.options.longestEdge = longestEdge.pixels }
+        if let quality { compression.options.quality = quality.value }
+        if let metadata { compression.options.removesMetadata = metadata == .removeMetadata }
+      }
+    }
+    return (slug, warnings)
   }
+}
+
+/// `--longest-edge`: a positive number of pixels, or `none`.
+struct LongestEdgeArgument: ExpressibleByArgument, Equatable {
+  let pixels: Int?
+
+  init?(argument: String) {
+    if argument == "none" {
+      pixels = nil
+    } else if let value = Int(argument), value > 0 {
+      pixels = value
+    } else {
+      return nil
+    }
+  }
+}
+
+/// `--quality high|medium|small`.
+enum QualityArgument: String, ExpressibleByArgument, CaseIterable {
+  case high, medium, small
+
+  var value: CompressionQuality { CompressionQuality(rawValue: rawValue)! }
+}
+
+/// `--remove-metadata` / `--keep-metadata`.
+enum MetadataArgument: String, EnumerableFlag {
+  case removeMetadata
+  case keepMetadata
 }
 
 /// The key template warnings for the project's template and key prefix as saved.

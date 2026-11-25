@@ -27,7 +27,7 @@ import Testing
     let database = try PinaxAppModel.openCatalog(at: url)
     #expect(try database.read { try $0.tableExists("asset_label") })
     let applied = try database.read { try Database.migrator.appliedMigrations($0) }
-    #expect(applied == ["v1_initial", "v2_favorite_label", "v3_pending_deletion", "v4_project_key_template", "v5_run"])
+    #expect(applied == ["v1_initial", "v2_favorite_label", "v3_pending_deletion", "v4_project_key_template", "v5_run", "v6_asset_source_sha256"])
     // The query from the report: the label summaries now run.
     _ = try database.read { db in
       try Row.fetchAll(db, sql: "SELECT label, COUNT(*) FROM asset_label GROUP BY label")
@@ -59,7 +59,7 @@ import Testing
 
     let reopened = try Database.open(at: url)
     let applied = try await reopened.read { try Database.migrator.appliedMigrations($0) }
-    #expect(applied == ["v1_initial", "v2_favorite_label", "v3_pending_deletion", "v4_project_key_template", "v5_run"])
+    #expect(applied == ["v1_initial", "v2_favorite_label", "v3_pending_deletion", "v4_project_key_template", "v5_run", "v6_asset_source_sha256"])
     #expect(try await reopened.read { try $0.tableExists("asset_label") })
   }
 }

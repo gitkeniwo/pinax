@@ -376,7 +376,7 @@ func backupContract() throws {
     )
     let backup = try CatalogBackups.create(from: database, now: now)
     #expect(backup.schema == 1)
-    #expect(backup.migrations == ["v1_initial", "v2_favorite_label", "v3_pending_deletion", "v4_project_key_template", "v5_run"])
+    #expect(backup.migrations == ["v1_initial", "v2_favorite_label", "v3_pending_deletion", "v4_project_key_template", "v5_run", "v6_asset_source_sha256"])
     #expect(backup.tables.backends.map(\.slug) == ["r2"])
     #expect(backup.tables.projects.map(\.slug) == ["blog"])
     #expect(backup.tables.assets.isEmpty)
