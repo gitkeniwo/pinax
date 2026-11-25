@@ -49,6 +49,9 @@ public struct UploadOutcome: Equatable, Sendable {
   public let uploadedAt: String
   public let deduplicated: Bool
   public let dryRun: Bool
+  /// Set when the stored bytes are a recompressed copy of the file, whether
+  /// uploaded now or reused.
+  public let compression: UploadCompressionFacts?
 
   public init(
     sha256: String,
@@ -61,7 +64,8 @@ public struct UploadOutcome: Equatable, Sendable {
     height: Int?,
     uploadedAt: String,
     deduplicated: Bool,
-    dryRun: Bool
+    dryRun: Bool,
+    compression: UploadCompressionFacts? = nil
   ) {
     self.sha256 = sha256
     self.key = key
@@ -74,6 +78,14 @@ public struct UploadOutcome: Equatable, Sendable {
     self.uploadedAt = uploadedAt
     self.deduplicated = deduplicated
     self.dryRun = dryRun
+    self.compression = compression
+  }
+}
+
+extension Optional where Wrapped == PreparedUpload.Match {
+  fileprivate var isOriginal: Bool {
+    if case .original = self { return true }
+    return false
   }
 }
 
@@ -162,71 +174,156 @@ public final class UploadPipeline: Sendable {
     self.dataReader = dataReader
   }
 
+  /// Prepares and uploads one file in one go, sending the compressed copy
+  /// whenever compression made one. Concurrent calls for the same content,
+  /// options and flags share one upload.
   public func upload(
     fileURL: URL,
     force: Bool = false,
     dryRun: Bool = false,
     date: Date = Date(),
-    sourceURL: String? = nil
+    sourceURL: String? = nil,
+    compression: CompressionOptions? = nil
   ) async throws -> UploadOutcome {
-    guard let backendID = backend.id else {
-      throw UploadPipelineError.missingBackendID
-    }
-    if project != nil, project?.id == nil {
-      throw UploadPipelineError.missingProjectID
-    }
+    let backendID = try checkedBackendID()
     let sha256 = try Hashing.sha256(ofFileAt: fileURL)
-    let workKey = "\(backendID):\(sha256):\(force):\(dryRun)"
+    let fingerprint = compression?.fingerprint ?? "original"
+    let workKey = "\(backendID):\(sha256):\(fingerprint):\(force):\(dryRun)"
     let task = await coordinator.task(for: workKey) { [self] in
-      try await performUpload(
-        fileURL: fileURL,
-        preflightSHA256: sha256,
-        backendID: backendID,
-        force: force,
-        dryRun: dryRun,
-        date: date,
-        sourceURL: sourceURL.map(AssetProvenance.recordedURL)
-      )
+      let prepared = try prepare(
+        fileURL: fileURL, preflightSHA256: sha256, backendID: backendID,
+        compression: compression, force: force)
+      return try await upload(
+        prepared, useOriginal: false, dryRun: dryRun, date: date, sourceURL: sourceURL)
     }
     return try await task.value
   }
 
-  private func performUpload(
+  /// Reads and hashes the file, looks it up, and compresses it when
+  /// `compression` is given. Nothing is written. The catalog is matched
+  /// first by the original's hash as stored bytes, then by the original's
+  /// hash as the source of a copy made with the same options; a match skips
+  /// compressing (unless `force`).
+  public func prepare(
+    fileURL: URL,
+    compression: CompressionOptions? = nil,
+    force: Bool = false
+  ) async throws -> PreparedUpload {
+    let backendID = try checkedBackendID()
+    return try prepare(
+      fileURL: fileURL, preflightSHA256: try Hashing.sha256(ofFileAt: fileURL),
+      backendID: backendID, compression: compression, force: force)
+  }
+
+  private func prepare(
     fileURL: URL,
     preflightSHA256: String,
     backendID: Int64,
-    force: Bool,
-    dryRun: Bool,
-    date: Date,
-    sourceURL: String?
-  ) async throws -> UploadOutcome {
-    var sha256 = preflightSHA256
-    var existing = try existingAsset(backendID: backendID, sha256: sha256)
-    if let existing, !force || dryRun {
-      if !dryRun, let projectID = project?.id, let assetID = existing.id {
-        try link(assetID: assetID, projectID: projectID, date: date)
+    compression options: CompressionOptions?,
+    force: Bool
+  ) throws -> PreparedUpload {
+    func prepared(_ sha256: String, _ match: PreparedUpload.Match?, _ data: Data?)
+      -> PreparedUpload
+    {
+      var result: CompressionResult?
+      // A match is reused as it is, so there is nothing to compress unless
+      // `force` sends the bytes again; an original is never compressed then.
+      if let data, let options, match == nil || (force && !match.isOriginal) {
+        result = ImageCompressor.compress(data, options: options)
       }
-      return outcome(for: existing, deduplicated: true, dryRun: dryRun)
+      return PreparedUpload(
+        fileURL: fileURL, sourceSHA256: sha256, compressionOptions: options, force: force,
+        match: match, compression: result, sourceData: data)
     }
-
+    var sha256 = preflightSHA256
+    var match = try catalogMatch(backendID: backendID, sourceSHA256: sha256, options: options)
+    if match != nil, !force {
+      return prepared(sha256, match, nil)
+    }
     let data = try dataReader(fileURL)
     let payloadSHA256 = Hashing.sha256(of: data)
     if payloadSHA256 != sha256 {
       sha256 = payloadSHA256
-      existing = try existingAsset(backendID: backendID, sha256: sha256)
-      if let existing, !force || dryRun {
-        if !dryRun, let projectID = project?.id, let assetID = existing.id {
-          try link(assetID: assetID, projectID: projectID, date: date)
-        }
-        return outcome(for: existing, deduplicated: true, dryRun: dryRun)
+      match = try catalogMatch(backendID: backendID, sourceSHA256: sha256, options: options)
+      if match != nil, !force {
+        return prepared(sha256, match, data)
+      }
+    }
+    return prepared(sha256, match, data)
+  }
+
+  /// Finishes a prepared upload. With `useOriginal`, or when compression
+  /// made no copy, the original's bytes are sent as they are; otherwise the
+  /// compressed copy is, recorded with the original's hash. Either way the
+  /// bytes about to be sent are looked up once more, since a compressed copy
+  /// may already be in the catalog.
+  public func upload(
+    _ prepared: PreparedUpload,
+    useOriginal: Bool,
+    dryRun: Bool = false,
+    date: Date = Date(),
+    sourceURL: String? = nil
+  ) async throws -> UploadOutcome {
+    let backendID = try checkedBackendID()
+    let force = prepared.force
+    let sourceURL = sourceURL.map(AssetProvenance.recordedURL)
+    switch prepared.match {
+    case let .original(asset) where !force || dryRun:
+      return try deduplicate(asset, facts: nil, dryRun: dryRun, date: date)
+    case let .compressedCopy(asset) where !useOriginal && (!force || dryRun):
+      return try deduplicate(
+        asset, facts: UploadCompressionFacts(asset: asset), dryRun: dryRun, date: date)
+    default:
+      break
+    }
+
+    let source: Data
+    let sourceSHA256: String
+    if let data = prepared.sourceData {
+      source = data
+      sourceSHA256 = prepared.sourceSHA256
+    } else {
+      source = try dataReader(prepared.fileURL)
+      sourceSHA256 = Hashing.sha256(of: source)
+    }
+    var compressed: CompressedImage?
+    var facts: UploadCompressionFacts?
+    if !useOriginal, let options = prepared.compressionOptions, !prepared.match.isOriginal {
+      let result = prepared.compression ?? ImageCompressor.compress(source, options: options)
+      if let image = result.compressedImage {
+        compressed = image
+        facts = UploadCompressionFacts(options: options, sourceSHA256: sourceSHA256, image: image)
       }
     }
 
-    let filename = fileURL.lastPathComponent
-    guard let mime = MimeDetector.mimeType(of: data, fileExtension: fileURL.pathExtension) else {
-      throw UploadPipelineError.unsupportedFileType(filename)
+    let data = compressed?.data ?? source
+    let sha256 = compressed.map { Hashing.sha256(of: $0.data) } ?? sourceSHA256
+    let existing = try existingAsset(backendID: backendID, sha256: sha256)
+    if let existing, !force || dryRun {
+      return try deduplicate(
+        existing, facts: facts ?? UploadCompressionFacts(asset: existing), dryRun: dryRun,
+        date: date)
     }
-    let dimensions = ImageProbe.dimensions(of: data)
+
+    let filename = prepared.fileURL.lastPathComponent
+    let mime: String
+    let dimensions: ImageDimensions?
+    let fileExtension: String
+    if let compressed {
+      mime = compressed.mime
+      dimensions = ImageDimensions(width: compressed.width, height: compressed.height)
+      fileExtension = compressed.fileExtension
+    } else {
+      guard
+        let detected = MimeDetector.mimeType(
+          of: data, fileExtension: prepared.fileURL.pathExtension)
+      else {
+        throw UploadPipelineError.unsupportedFileType(filename)
+      }
+      mime = detected
+      dimensions = ImageProbe.dimensions(of: data)
+      fileExtension = prepared.fileURL.pathExtension
+    }
     let key: String
     if let existing {
       key = existing.key
@@ -237,13 +334,14 @@ public final class UploadPipeline: Sendable {
           keyPrefix: project?.keyPrefix ?? "",
           originalFilename: filename,
           sha256: sha256,
-          fileExtension: fileURL.pathExtension,
+          fileExtension: fileExtension,
           date: date
         )
       } catch let KeyTemplateError.invalid(issues) {
         throw UploadPipelineError.invalidKeyTemplate(project: project?.slug, issues: issues)
       }
     }
+    let baseMeta = sourceURL.map(AssetProvenance.migratedMeta(sourceURL:)) ?? "{}"
     let provisional = Asset(
       sha256: sha256,
       backendID: backendID,
@@ -253,13 +351,14 @@ public final class UploadPipeline: Sendable {
       height: dimensions?.height,
       mime: mime,
       originalFilename: filename,
-      meta: sourceURL.map(AssetProvenance.migratedMeta(sourceURL:)) ?? "{}",
+      meta: facts?.merged(intoMeta: baseMeta) ?? baseMeta,
       uploadedAt: timestamp(date),
       createdAt: timestamp(date),
-      updatedAt: timestamp(date)
+      updatedAt: timestamp(date),
+      sourceSHA256: facts?.sourceSHA256
     )
     if dryRun {
-      return outcome(for: provisional, deduplicated: false, dryRun: true)
+      return outcome(for: provisional, deduplicated: false, dryRun: true, compression: facts)
     }
 
     var metadata = [
@@ -275,6 +374,9 @@ public final class UploadPipeline: Sendable {
     if let sourceURL {
       metadata["source-url"] = AssetProvenance.percentEncodedNonASCII(sourceURL)
     }
+    if let facts {
+      metadata["source-sha256"] = facts.sourceSHA256
+    }
     guard let uploader else {
       throw UploadPipelineError.missingUploader
     }
@@ -289,7 +391,7 @@ public final class UploadPipeline: Sendable {
     guard existing == nil else {
       // A forced re-upload rewrites its own object at its own key.
       _ = try await uploader.upload(request)
-      return try await store(provisional, data: data, dimensions: dimensions, date: date)
+      return try await store(provisional, facts: facts, date: date)
     }
 
     // A new key: claim it in this process, check the catalog, then
@@ -321,7 +423,47 @@ public final class UploadPipeline: Sendable {
         throw UploadPipelineError.keyTaken(key)
       }
     }
-    return try await store(provisional, data: data, dimensions: dimensions, date: date)
+    return try await store(provisional, facts: facts, date: date)
+  }
+
+  private func checkedBackendID() throws -> Int64 {
+    guard let backendID = backend.id else {
+      throw UploadPipelineError.missingBackendID
+    }
+    if project != nil, project?.id == nil {
+      throw UploadPipelineError.missingProjectID
+    }
+    return backendID
+  }
+
+  /// Reuses `asset`: links it to the project unless this is a dry run.
+  private func deduplicate(
+    _ asset: Asset, facts: UploadCompressionFacts?, dryRun: Bool, date: Date
+  ) throws -> UploadOutcome {
+    if !dryRun, let projectID = project?.id, let assetID = asset.id {
+      try link(assetID: assetID, projectID: projectID, date: date)
+    }
+    return outcome(for: asset, deduplicated: true, dryRun: dryRun, compression: facts)
+  }
+
+  /// The catalog's asset for an original: stored as it is, or else a copy
+  /// compressed from it with the same options.
+  private func catalogMatch(
+    backendID: Int64, sourceSHA256: String, options: CompressionOptions?
+  ) throws -> PreparedUpload.Match? {
+    if let asset = try existingAsset(backendID: backendID, sha256: sourceSHA256) {
+      return .original(asset)
+    }
+    guard let options else { return nil }
+    let copies = try database.read { db in
+      try Asset
+        .filter(Column("backend_id") == backendID && Column("source_sha256") == sourceSHA256)
+        .order(Column("id"))
+        .fetchAll(db)
+    }
+    let fingerprint = options.fingerprint
+    return copies.first { UploadCompressionFacts.fingerprint(inMeta: $0.meta) == fingerprint }
+      .map(PreparedUpload.Match.compressedCopy)
   }
 
   /// Inserts the uploaded asset (or updates a force-re-uploaded one) and
@@ -329,14 +471,10 @@ public final class UploadPipeline: Sendable {
   /// bucket for Unreferenced Objects; nothing deletes it.
   private func store(
     _ provisional: Asset,
-    data: Data,
-    dimensions: ImageDimensions?,
+    facts: UploadCompressionFacts?,
     date: Date
   ) async throws -> UploadOutcome {
     let backendID = provisional.backendID
-    let key = provisional.key
-    let mime = provisional.mime
-    let filename = provisional.originalFilename
     let storedSHA256 = provisional.sha256
     let stored = try await database.write { db in
       if var existing =
@@ -344,14 +482,18 @@ public final class UploadPipeline: Sendable {
         .filter(Column("backend_id") == backendID && Column("sha256") == storedSHA256)
         .fetchOne(db)
       {
-        existing.key = key
-        existing.byteSize = Int64(data.count)
-        existing.width = dimensions?.width
-        existing.height = dimensions?.height
-        existing.mime = mime
-        existing.originalFilename = filename
+        existing.key = provisional.key
+        existing.byteSize = provisional.byteSize
+        existing.width = provisional.width
+        existing.height = provisional.height
+        existing.mime = provisional.mime
+        existing.originalFilename = provisional.originalFilename
         existing.uploadedAt = timestamp(date)
         existing.updatedAt = timestamp(date)
+        if let facts {
+          existing.sourceSHA256 = facts.sourceSHA256
+          existing.meta = facts.merged(intoMeta: existing.meta)
+        }
         try existing.update(db)
         try link(assetID: existing.id!, projectID: project?.id, date: date, in: db)
         return existing
@@ -360,7 +502,7 @@ public final class UploadPipeline: Sendable {
       try link(assetID: asset.id!, projectID: project?.id, date: date, in: db)
       return asset
     }
-    return outcome(for: stored, deduplicated: false, dryRun: false)
+    return outcome(for: stored, deduplicated: false, dryRun: false, compression: facts)
   }
 
   private func existingAsset(backendID: Int64, sha256: String) throws -> Asset? {
@@ -385,7 +527,9 @@ public final class UploadPipeline: Sendable {
     )
   }
 
-  private func outcome(for asset: Asset, deduplicated: Bool, dryRun: Bool) -> UploadOutcome {
+  private func outcome(
+    for asset: Asset, deduplicated: Bool, dryRun: Bool, compression: UploadCompressionFacts?
+  ) -> UploadOutcome {
     UploadOutcome(
       sha256: asset.sha256,
       key: asset.key,
@@ -397,7 +541,8 @@ public final class UploadPipeline: Sendable {
       height: asset.height,
       uploadedAt: asset.uploadedAt,
       deduplicated: deduplicated,
-      dryRun: dryRun
+      dryRun: dryRun,
+      compression: compression
     )
   }
 

@@ -29,6 +29,16 @@ extension Database {
     migrator.registerMigration("v5_run") { database in
       try database.execute(sql: Self.runSchema)
     }
+    // The original's hash for an asset whose stored bytes are a
+    // recompressed copy, so the next upload of the same original can reuse
+    // it. NULL for every uploaded original.
+    migrator.registerMigration("v6_asset_source_sha256") { database in
+      try database.execute(
+        sql: """
+          ALTER TABLE asset ADD COLUMN source_sha256 TEXT;
+          CREATE INDEX ix_asset_backend_source_sha ON asset(backend_id, source_sha256);
+          """)
+    }
     return migrator
   }
 

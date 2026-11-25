@@ -121,7 +121,7 @@ private func types(_ events: [RunEventRecord]) -> [String] { events.map(\.event.
     defer { source.remove() }
     #expect(try source.tableExists("run") && source.tableExists("run_event"))
     let backup = try CatalogBackups.create(from: source.database)
-    #expect(backup.migrations.last == "v5_run")
+    #expect(backup.migrations.contains("v5_run"))
     let encoded = String(decoding: try JSONEncoder().encode(backup), as: UTF8.self)
     #expect(!encoded.contains("\"run"))
 

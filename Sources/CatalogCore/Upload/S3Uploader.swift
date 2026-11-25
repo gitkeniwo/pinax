@@ -32,6 +32,7 @@ public struct S3Uploader: Uploader {
     "x-amz-meta-width",
     "x-amz-meta-height",
     "x-amz-meta-source-url",
+    "x-amz-meta-source-sha256",
   ])
 
   private let backend: Backend

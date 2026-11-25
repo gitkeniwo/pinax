@@ -64,6 +64,11 @@ struct ExternalsMigrateCommand: AsyncParsableCommand {
   @Option(help: "PROJECT/LABEL of a source to write although it isn't clean in git. Repeatable.")
   var allowSource: [String] = []
 
+  @Flag(
+    inversion: .prefixedNo,
+    help: "With --apply: compress the uploaded copies, or upload originals (default: as each project says).")
+  var compress: Bool?
+
   @Option
   var format: RewriteOutputFormat = .table
 
@@ -81,6 +86,9 @@ struct ExternalsMigrateCommand: AsyncParsableCommand {
     } else {
       guard fromRun == nil else { throw ValidationError("--from-run only goes with --apply.") }
       guard allowSource.isEmpty else { throw ValidationError("--allow-source only goes with --apply.") }
+      guard compress == nil else {
+        throw ValidationError("--compress and --no-compress only go with --apply.")
+      }
       guard project != nil else { throw ValidationError("Give --project SLUG.") }
       guard !hosts.isEmpty || !urls.isEmpty else {
         throw ValidationError("Name what to migrate: --host HOST or --url URL, each repeatable.")
@@ -126,7 +134,8 @@ struct ExternalsMigrateCommand: AsyncParsableCommand {
         result = try await ExternalMigration.apply(
           fromRun: fromRun, allowedSources: Set(allowSource), database: database,
           uploader: try makeUploader(backend), verifier: verifier, git: git, cacheRoot: cacheRoot,
-          backupRoot: backupRoot, now: now, progress: { _ in tail.flush() })
+          backupRoot: backupRoot, now: now, compression: CompressionChoice(flag: compress),
+          progress: { _ in tail.flush() })
       } catch let error as RewriteRunError {
         throw Self.refusal(error, fromRun: fromRun, params: params)
       }
