@@ -63,7 +63,7 @@ struct ImportPicGoGalleryCommand: AsyncParsableCommand {
     // Never in the same pass as the insert. The import above has
     // committed; backfill runs against the now-known-good catalog rows.
     if PicGoBackfill.requiresACLResetAcknowledgement(selected) && !allowAclReset {
-      throw ValidationError(
+      throw CLIError.refused(
         "Backfill re-uploads each object onto itself, and on S3 providers with per-object "
           + "ACLs that resets visibility to the bucket default — HEAD cannot read an object's "
           + "ACL, so it cannot be preserved. R2 backends are unaffected (no per-object ACL). "
@@ -71,11 +71,11 @@ struct ImportPicGoGalleryCommand: AsyncParsableCommand {
     }
     let credentials: BackendCredentials
     if selected.keychainRef.isEmpty {
-      throw ValidationError(credentialMissingMessage(for: selected))
+      throw CLIError.credentials(credentialMissingMessage(for: selected))
     } else if let stored = try Keychain().load(for: selected.keychainRef) {
       credentials = stored
     } else {
-      throw ValidationError(credentialMissingMessage(for: selected))
+      throw CLIError.credentials(credentialMissingMessage(for: selected))
     }
     let inventory = S3ObjectInventory(backend: selected, credentials: credentials)
     let assets = try PicGoBackfill.assets(for: selected, in: database)
@@ -105,7 +105,7 @@ struct ImportPicGoGalleryCommand: AsyncParsableCommand {
       guard let answer = readLine()?.trimmingCharacters(in: .whitespaces).lowercased(),
         answer == "y" || answer == "yes"
       else {
-        throw ValidationError("Aborted; no objects were modified.")
+        throw CLIError.failure("Aborted; no objects were modified.")
       }
     }
 

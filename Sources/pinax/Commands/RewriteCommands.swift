@@ -2,10 +2,7 @@ import ArgumentParser
 import CatalogCore
 import Foundation
 
-enum RewriteOutputFormat: String, ExpressibleByArgument {
-  case table
-  case json
-}
+typealias RewriteOutputFormat = OutputFormat
 
 enum RunLogOutputFormat: String, ExpressibleByArgument {
   case table
@@ -30,74 +27,18 @@ enum RewriteCommandError: Error, Equatable, CustomStringConvertible {
   }
 }
 
-/// Exit statuses of the rewrite commands, after sysexits(3).
-enum RewriteExit {
-  static let failure: Int32 = 1
-  static let usage: Int32 = 64
-  static let notFound: Int32 = 66
-  static let remote: Int32 = 69
-  static let refused: Int32 = 77
+/// The name the rewrite commands use for the shared table.
+typealias RewriteExit = CLIExit
 
-  /// The status of an error the rewrite commands classify, or nil for one
-  /// ArgumentParser reports as before.
-  static func code(for error: Error) -> Int32? {
-    switch error {
-    case let error as RewriteRunError:
-      switch error {
-      case .runNotFound, .unknownSources: return notFound
-      case .notAPreview, .planChanged, .sourcesNotAllowed, .targetsNotVerified: return refused
-      }
-    case is RewriteApplyError:
-      return refused
-    case is RewritePlanError:
-      return usage
-    case let error as RewriteCommandError:
-      switch error {
-      case .mapNotFound: return notFound
-      case .badMap: return usage
-      }
-    case let error as DomainMigrationError:
-      switch error {
-      case .invalidDomain, .sameAsCurrent, .notAnOldDomain: return usage
-      case .noProjects: return notFound
-      case .targetsNotVerified, .prefixMoved: return refused
-      }
-    case let error as CatalogConfigurationError:
-      switch error {
-      case .projectNotFound, .backendNotFound: return notFound
-      case .domainOfOtherBackend: return usage
-      default: return nil
-      }
-    case let error as UsageScanError:
-      if case .sourceNotFound = error { return notFound }
-      return nil
-    case let error as ExternalMigrationError:
-      switch error {
-      case .noTargets: return usage
-      case .noBackend, .backendsDiffer: return notFound
-      case .busy, .cacheInvalid: return refused
-      }
-    case let error as ExternalsMigrateError:
-      switch error {
-      case .notInOtherDomains: return usage
-      case .noCredentials: return notFound
-      case .refused: return refused
-      }
-    default:
-      return nil
-    }
-  }
-
-  /// Prints `output`, exiting with its status; a classified error is
-  /// printed as `Error: …` and exits with its status.
+extension CLIExit {
+  /// Prints `output`, exiting with its status; a classified error exits as
+  /// `translated` says.
   static func finish(_ perform: () async throws -> RewriteCommandOutput) async throws {
     let output: RewriteCommandOutput
     do {
       output = try await perform()
     } catch {
-      guard let code = code(for: error) else { throw error }
-      FileHandle.standardError.write(Data("Error: \(String(describing: error))\n".utf8))
-      throw ExitCode(code)
+      throw translated(error)
     }
     if !output.stdout.isEmpty { print(output.stdout) }
     if output.exitCode != 0 { throw ExitCode(output.exitCode) }

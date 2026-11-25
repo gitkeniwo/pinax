@@ -2,10 +2,7 @@ import ArgumentParser
 import CatalogCore
 import Foundation
 
-enum UsageOutputFormat: String, ExpressibleByArgument {
-  case table
-  case json
-}
+typealias UsageOutputFormat = OutputFormat
 
 struct UsageCommand: ParsableCommand {
   static let configuration = CommandConfiguration(
@@ -122,6 +119,9 @@ struct OrphansCommand: ParsableCommand {
   @Option(name: .long)
   var minScans = 2
 
+  @Option(name: .long)
+  var format: OutputFormat = .table
+
   mutating func run() throws {
     let output = try output(in: openCatalogDatabase())
     FileHandle.standardError.write(Data(output.notes.utf8))
@@ -130,7 +130,7 @@ struct OrphansCommand: ParsableCommand {
   }
 
   /// What `run` writes: `notes` and `trailer` to standard error, before and
-  /// after the `table` on standard output.
+  /// after the `table` (or the JSON document) on standard output.
   func output(in database: CatalogDatabasePool) throws
     -> (notes: String, table: String, trailer: String)
   {
@@ -157,6 +157,10 @@ struct OrphansCommand: ParsableCommand {
     for item in report.assets {
       table += "\(item.asset.sha256.prefix(12))\t\(item.asset.key)\t\(item.url)\n"
     }
+    if format == .json {
+      table =
+        try encodedJSON(OrphanDocument(report, project: project, minimumScans: minScans)) + "\n"
+    }
     // The assets left out because their every project is not tracked.
     var trailer = ""
     if !report.untracked.isEmpty {
@@ -177,9 +181,9 @@ struct ExternalsCommand: ParsableCommand {
   )
 }
 
-/// `pinax externals [--project SLUG]` — the listing, unchanged; it is the
-/// default subcommand so the bare form keeps working.
-struct ExternalsListCommand: ParsableCommand {
+/// `pinax externals [--project SLUG]` — the listing; it is the default
+/// subcommand so the bare form keeps working.
+struct ExternalsListCommand: AsyncParsableCommand {
   static let configuration = CommandConfiguration(
     commandName: "list",
     abstract: "List unmatched URLs in the latest completed usage scans."
@@ -188,17 +192,22 @@ struct ExternalsListCommand: ParsableCommand {
   @Option(name: .long)
   var project: String?
 
-  mutating func run() throws {
-    let items = try CatalogUsage.externals(project: project, in: openCatalogDatabase())
+  @Option(name: .long)
+  var format: OutputFormat = .table
+
+  mutating func run() async throws {
+    let database = try openCatalogDatabase()
+    if format == .json {
+      let set = try await CatalogUsage.externalReferences(project: project, in: database)
+      print(
+        try encodedJSON(
+          ExternalListDocument(project: project, items: set.references.map(ExternalJSON.init))))
+      return
+    }
+    let items = try CatalogUsage.externals(project: project, in: database)
     print("KIND\tSOURCE\tURL")
     for item in items {
       print("\(item.kind)\t\(item.sourceReference)\t\(item.rawURL)")
     }
   }
-}
-
-func encodedJSON<T: Encodable>(_ value: T) throws -> String {
-  let encoder = JSONEncoder()
-  encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
-  return String(decoding: try encoder.encode(value), as: UTF8.self)
 }

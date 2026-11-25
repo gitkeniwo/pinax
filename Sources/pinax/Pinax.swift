@@ -6,6 +6,7 @@ struct Pinax: AsyncParsableCommand {
   static let configuration = CommandConfiguration(
     commandName: "pinax",
     abstract: "Manage a self-hosted image catalog.",
+    discussion: CLIExit.helpTable,
     version: PinaxVersion.current,
     subcommands: [
       Initialize.self,
@@ -32,4 +33,19 @@ struct Pinax: AsyncParsableCommand {
       ImportCommand.self,
     ]
   )
+
+  /// ArgumentParser's own `main`, except that a classified runtime error
+  /// exits with its status from `CLIExit` and prints no usage.
+  static func main() async {
+    do {
+      var command = try await asyncParseAsRoot(nil)
+      if var asyncCommand = command as? AsyncParsableCommand {
+        try await asyncCommand.run()
+      } else {
+        try command.run()
+      }
+    } catch {
+      exit(withError: CLIExit.translated(error))
+    }
+  }
 }

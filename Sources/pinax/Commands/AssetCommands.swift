@@ -118,8 +118,15 @@ struct AssetShowCommand: ParsableCommand {
   @Argument
   var identifier: String
 
+  @Option(name: .long)
+  var format: OutputFormat = .table
+
   mutating func run() throws {
     let details = try CatalogAssets.details(identifier, in: openCatalogDatabase())
+    if format == .json {
+      print(try encodedJSON(AssetDocument(details)))
+      return
+    }
     let asset = details.item.asset
     print("id: \(asset.id.map(String.init) ?? "")")
     print("sha256: \(asset.sha256)")
@@ -185,8 +192,17 @@ struct NoteShowCommand: ParsableCommand {
   @Argument(help: "An exact asset key or an unambiguous SHA-256 prefix.")
   var identifier: String
 
+  @Option(name: .long)
+  var format: OutputFormat = .table
+
   mutating func run() throws {
-    print(try NoteCommandOperations.show(for: identifier, in: openCatalogDatabase()))
+    let database = try openCatalogDatabase()
+    if format == .json {
+      let asset = try CatalogAssets.resolve(identifier, in: database).asset
+      print(try encodedJSON(NoteDocument(asset)))
+      return
+    }
+    print(try NoteCommandOperations.show(for: identifier, in: database))
   }
 }
 

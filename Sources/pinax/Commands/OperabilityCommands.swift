@@ -8,10 +8,13 @@ struct DoctorCommand: ParsableCommand {
     abstract: "Check catalog integrity and operational safety."
   )
 
+  @Option(name: .long)
+  var format: OutputFormat = .table
+
   mutating func run() throws {
     let databaseURL = DBLocation.locate()
     if let problem = DatabasePathSafety.problem(at: databaseURL) {
-      throw ValidationError("FATAL: \(problem). Pinax refuses to open this database.")
+      throw CLIError.refused("FATAL: \(problem). Pinax refuses to open this database.")
     }
     let database = try Database.open(at: databaseURL)
     try Database.migrate(database)
@@ -21,7 +24,9 @@ struct DoctorCommand: ParsableCommand {
       databaseURL: databaseURL,
       credentialExists: { try keychain.load(for: $0) != nil }
     )
-    for check in report.checks {
+    // The JSON document carries the warnings itself.
+    if format == .json { print(try encodedJSON(report)) }
+    for check in report.checks where format == .table {
       let line = "\(check.status.rawValue.uppercased())\t\(check.name)\t\(check.detail)\n"
       let handle = check.status == .warning ? FileHandle.standardError : FileHandle.standardOutput
       handle.write(Data(line.utf8))
@@ -59,11 +64,15 @@ struct RestoreCommand: ParsableCommand {
 
   @Argument var file: String
 
+  @Option(name: .long)
+  var format: OutputFormat = .table
+
   mutating func run() throws {
     let keychain = Keychain()
     let output = try RestoreCommandOperations.restore(
       file: URL(fileURLWithPath: file),
       into: openCatalogDatabase(),
+      format: format,
       credentialExists: { try keychain.load(for: $0) != nil })
     print(output, terminator: "")
   }
@@ -75,6 +84,7 @@ enum RestoreCommandOperations {
   static func restore(
     file: URL,
     into database: CatalogDatabasePool,
+    format: OutputFormat = .table,
     credentialExists: (String) throws -> Bool,
     folderExists: (String) -> Bool = CatalogBackups.directoryExists
   ) throws -> String {
@@ -82,6 +92,9 @@ enum RestoreCommandOperations {
     let counts = try CatalogBackups.restore(backup, into: database)
     let followUps = try CatalogBackups.followUps(
       in: database, credentialExists: credentialExists, folderExists: folderExists)
+    if format == .json {
+      return try encodedJSON(RestoreDocument(counts: counts, followUps: followUps)) + "\n"
+    }
     var lines = counts.tables.map { "\($0.name)\t\($0.count)" }
     lines.append("favorite\t\(counts.favorites)")
     let backends = followUps.backendsWithoutCredentials
@@ -146,7 +159,7 @@ private func resolveReindexBackend(
     let bucket = environment["PINAX_S3_BUCKET"],
     let urlPrefix = environment["PINAX_S3_URL_PREFIX"]
   else {
-    throw ValidationError(
+    throw CLIError.notFound(
       "Backend '\(slug)' does not exist. Disaster recovery requires PINAX_S3_ENDPOINT, "
         + "PINAX_S3_BUCKET, and PINAX_S3_URL_PREFIX."
     )
@@ -192,5 +205,5 @@ func reindexCredentials(for backend: Backend) throws -> BackendCredentials {
   {
     return BackendCredentials(accessKeyID: accessKeyID, secretAccessKey: secretAccessKey)
   }
-  throw ValidationError(credentialMissingMessage(for: backend))
+  throw CLIError.credentials(credentialMissingMessage(for: backend))
 }

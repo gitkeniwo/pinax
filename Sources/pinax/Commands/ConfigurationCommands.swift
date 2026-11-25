@@ -46,9 +46,17 @@ struct BackendAdd: ParsableCommand {
 struct BackendList: ParsableCommand {
   static let configuration = CommandConfiguration(commandName: "ls")
 
+  @Option(name: .long)
+  var format: OutputFormat = .table
+
   mutating func run() throws {
     let database = try openCatalogDatabase()
-    for backend in try CatalogConfiguration.backends(in: database) {
+    let backends = try CatalogConfiguration.backends(in: database)
+    if format == .json {
+      print(try encodedJSON(BackendListDocument(backends: backends.map(BackendJSON.init))))
+      return
+    }
+    for backend in backends {
       print("\(backend.slug)\t\(backend.kind)\t\(backend.bucket)\t\(backend.urlPrefix)")
     }
   }
@@ -59,9 +67,18 @@ struct BackendShow: ParsableCommand {
 
   @Argument var slug: String
 
+  @Option(name: .long)
+  var format: OutputFormat = .table
+
   mutating func run() throws {
     let database = try openCatalogDatabase()
     let backend = try CatalogConfiguration.backend(slug: slug, in: database)
+    if format == .json {
+      let links = try CatalogConfiguration.domainLinkCounts(backendSlug: slug, in: database)
+        .current.links
+      print(try encodedJSON(BackendDocument(backend: BackendJSON(backend), urlPrefixLinks: links)))
+      return
+    }
     print("slug: \(backend.slug)")
     print("kind: \(backend.kind)")
     print("endpoint: \(backend.endpoint)")
@@ -102,7 +119,7 @@ struct BackendSetCredentials: ParsableCommand {
     guard let backend = try CatalogConfiguration.backends(in: database).first(where: {
       $0.slug == slug
     }) else {
-      throw ValidationError("Backend '\(slug)' does not exist.")
+      throw CLIError.notFound("Backend '\(slug)' does not exist.")
     }
     let credentials = try readCredentials()
     let reference = backend.keychainRef.isEmpty ? "backend.\(slug)" : backend.keychainRef
@@ -200,6 +217,9 @@ struct ProjectAdd: ParsableCommand {
 struct ProjectList: ParsableCommand {
   static let configuration = CommandConfiguration(commandName: "ls")
 
+  @Option(name: .long)
+  var format: OutputFormat = .table
+
   mutating func run() throws {
     print(try output(in: openCatalogDatabase()), terminator: "")
   }
@@ -212,7 +232,17 @@ struct ProjectList: ParsableCommand {
         backend.id.map { ($0, backend.slug) }
       }
     )
-    return try CatalogConfiguration.projects(in: database).map { project in
+    let projects = try CatalogConfiguration.projects(in: database)
+    if format == .json {
+      let records = projects.map { project in
+        ProjectJSON(
+          slug: project.slug, name: project.name, keyPrefix: project.keyPrefix,
+          keyTemplate: project.keyTemplate,
+          backend: project.backendID.flatMap { backendSlugs[$0] })
+      }
+      return try encodedJSON(ProjectListDocument(projects: records)) + "\n"
+    }
+    return projects.map { project in
       let backend = project.backendID.flatMap { backendSlugs[$0] } ?? "-"
       let template = project.keyTemplate ?? "default"
       return "\(project.slug)\t\(project.name)\t\(project.keyPrefix)\t\(backend)\t\(template)\n"
@@ -324,7 +354,7 @@ private func addBackend(
 
   let database = try openCatalogDatabase()
   if try CatalogConfiguration.backends(in: database).contains(where: { $0.slug == slug }) {
-    throw ValidationError("Backend '\(slug)' already exists.")
+    throw CLIError.failure("Backend '\(slug)' already exists.")
   }
 
   if noCredentials {
@@ -372,22 +402,22 @@ private func readCredentials() throws -> BackendCredentials {
   let secretAccessKey = environment["PINAX_SECRET_ACCESS_KEY"]
   if let accessKeyID, let secretAccessKey {
     guard !accessKeyID.isEmpty, !secretAccessKey.isEmpty else {
-      throw ValidationError("Credential environment variables must not be empty.")
+      throw CLIError.credentials("Credential environment variables must not be empty.")
     }
     return BackendCredentials(accessKeyID: accessKeyID, secretAccessKey: secretAccessKey)
   }
   if accessKeyID != nil || secretAccessKey != nil {
-    throw ValidationError("Set both PINAX_ACCESS_KEY_ID and PINAX_SECRET_ACCESS_KEY.")
+    throw CLIError.credentials("Set both PINAX_ACCESS_KEY_ID and PINAX_SECRET_ACCESS_KEY.")
   }
   guard isatty(STDIN_FILENO) == 1 else {
-    throw ValidationError(
+    throw CLIError.credentials(
       "Credentials require a TTY or PINAX_ACCESS_KEY_ID and PINAX_SECRET_ACCESS_KEY."
     )
   }
   let promptedAccessKeyID = try readSecret(prompt: "Access key ID: ")
   let promptedSecretAccessKey = try readSecret(prompt: "Secret access key: ")
   guard !promptedAccessKeyID.isEmpty, !promptedSecretAccessKey.isEmpty else {
-    throw ValidationError("Credentials must not be empty.")
+    throw CLIError.credentials("Credentials must not be empty.")
   }
   return BackendCredentials(
     accessKeyID: promptedAccessKeyID,
@@ -399,12 +429,12 @@ private func readSecret(prompt: String) throws -> String {
   FileHandle.standardError.write(Data(prompt.utf8))
   var settings = termios()
   guard tcgetattr(STDIN_FILENO, &settings) == 0 else {
-    throw ValidationError("Could not read terminal settings.")
+    throw CLIError.failure("Could not read terminal settings.")
   }
   let original = settings
   settings.c_lflag &= ~tcflag_t(ECHO)
   guard tcsetattr(STDIN_FILENO, TCSAFLUSH, &settings) == 0 else {
-    throw ValidationError("Could not disable terminal echo.")
+    throw CLIError.failure("Could not disable terminal echo.")
   }
   defer {
     var restored = original
@@ -412,7 +442,7 @@ private func readSecret(prompt: String) throws -> String {
     FileHandle.standardError.write(Data("\n".utf8))
   }
   guard let value = readLine() else {
-    throw ValidationError("Credential input ended unexpectedly.")
+    throw CLIError.credentials("Credential input ended unexpectedly.")
   }
   return value
 }
