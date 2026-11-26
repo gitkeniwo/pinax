@@ -349,6 +349,13 @@ struct SettingsStatusPill: View {
   }
 }
 
+/// One choice of a + that opens a menu.
+struct SettingsAddMenuItem: Identifiable {
+  let title: String
+  let action: () -> Void
+  var id: String { title }
+}
+
 /// The + and − buttons under a list, then whatever the bar carries at its
 /// trailing end (a hint, a scan time, a button).
 struct SettingsAddRemoveBar<Trailing: View>: View {
@@ -356,18 +363,22 @@ struct SettingsAddRemoveBar<Trailing: View>: View {
   let removeLabel: String
   let canRemove: Bool
   let onAdd: () -> Void
+  /// With choices, + opens them and `onAdd` is not used.
+  let addMenu: [SettingsAddMenuItem]
   let onRemove: () -> Void
   let trailing: Trailing
 
   init(
     add addLabel: String, remove removeLabel: String, canRemove: Bool,
-    onAdd: @escaping () -> Void, onRemove: @escaping () -> Void,
+    onAdd: @escaping () -> Void = {}, addMenu: [SettingsAddMenuItem] = [],
+    onRemove: @escaping () -> Void,
     @ViewBuilder trailing: () -> Trailing
   ) {
     self.addLabel = addLabel
     self.removeLabel = removeLabel
     self.canRemove = canRemove
     self.onAdd = onAdd
+    self.addMenu = addMenu
     self.onRemove = onRemove
     self.trailing = trailing()
   }
@@ -376,7 +387,7 @@ struct SettingsAddRemoveBar<Trailing: View>: View {
     HStack(spacing: Metrics.addRemoveBarSpacing) {
       SettingsAddRemoveButtons(
         addLabel: addLabel, removeLabel: removeLabel, canRemove: canRemove,
-        onAdd: onAdd, onRemove: onRemove)
+        onAdd: onAdd, addMenu: addMenu, onRemove: onRemove)
       Spacer(minLength: Metrics.rowSpacing)
       trailing
     }
@@ -405,11 +416,12 @@ struct SettingsAddRemoveButtons: View {
   var canAdd = true
   let canRemove: Bool
   let onAdd: () -> Void
+  var addMenu: [SettingsAddMenuItem] = []
   let onRemove: (() -> Void)?
 
   var body: some View {
     HStack(spacing: DesignMetrics.settings.addRemoveBarSpacing) {
-      Button(action: onAdd) { Image(systemName: "plus") }
+      add
         .accessibilityLabel(addLabel)
         .help(addLabel)
         .disabled(!canAdd)
@@ -421,6 +433,24 @@ struct SettingsAddRemoveButtons: View {
       }
     }
     .buttonStyle(.borderless)
+  }
+
+  /// A button, or a menu that looks like it: no indicator.
+  @ViewBuilder private var add: some View {
+    if addMenu.isEmpty {
+      Button(action: onAdd) { Image(systemName: "plus") }
+    } else {
+      Menu {
+        ForEach(addMenu) { item in
+          Button(item.title, action: item.action)
+        }
+      } label: {
+        Image(systemName: "plus")
+      }
+      .menuStyle(.button)
+      .menuIndicator(.hidden)
+      .fixedSize()
+    }
   }
 }
 

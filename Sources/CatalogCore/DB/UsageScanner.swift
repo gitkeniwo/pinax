@@ -57,9 +57,12 @@ public enum UsageScanner {
   /// `progress` gets the running count of files read, after each one.
   /// Command sources run only when `commands` allows them; by default none
   /// is, and a project that has one fails with `commandNotAllowed`.
+  /// `only` reads that one source in place of the project's stored ones, to
+  /// try it out.
   public static func scan(
     project slug: String,
     in database: CatalogDatabasePool,
+    only source: ProjectSource? = nil,
     commands: CommandSourcePolicy = .deny,
     runner: CommandSourceRunning = ShellCommandRunner(),
     progress: (@Sendable (Int) -> Void)? = nil
@@ -79,7 +82,8 @@ public enum UsageScanner {
       return (ProjectSettings(meta: project.meta), backends)
     }
     return try scan(
-      project: slug, sources: settings.sources, backends: backends, commands: commands,
+      project: slug, sources: source.map { [$0] } ?? settings.sources, backends: backends,
+      commands: commands,
       runner: runner, progress: progress)
   }
 

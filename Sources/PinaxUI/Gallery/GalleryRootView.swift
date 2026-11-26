@@ -15,6 +15,7 @@ public struct GalleryRootView: View {
       if let gallery = app.gallery {
         GalleryView(model: gallery)
           .usageEmptyScanConfirmation(app.usageSync, presenter: .gallery)
+          .commandApprovalSheet(app.usageSync, presenter: .gallery)
           .catalogRestoreSheets(app, presenter: .gallery)
       } else if let openError = app.openError {
         ContentUnavailableView(.couldNotOpenCatalog(error: openError)) {

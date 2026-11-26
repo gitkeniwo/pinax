@@ -12,6 +12,15 @@ public protocol UsageSyncing: Sendable {
   func scan(
     project: String, allowEmpty: Bool, progress: @escaping @Sendable (Int) -> Void
   ) async throws -> UsageScanOutcome
+  /// Runs one command source of the project and counts the references a scan
+  /// would take from it. Writes nothing.
+  func testCommand(project: String, source: ProjectSource) async throws -> Int
+}
+
+extension UsageSyncing {
+  public func testCommand(project: String, source: ProjectSource) async throws -> Int {
+    throw CommandSourceError.commandNotAllowed(label: source.label)
+  }
 }
 
 /// One Scan Now's result: the sync's, plus the files the scanner read and
@@ -25,6 +34,46 @@ public struct UsageScanOutcome: Equatable, Sendable {
     self.sync = sync
     self.files = files
     self.skipped = skipped
+  }
+}
+
+/// One command source's test run, and how it went.
+public struct CommandTest: Equatable, Sendable {
+  public enum Outcome: Equatable, Sendable {
+    case running
+    case succeeded(references: Int, seconds: TimeInterval)
+    /// `line` is the one line drawn; `detail` is all of it.
+    case failed(line: String, detail: String)
+  }
+
+  /// The source as it ran: a result no longer stands once it is edited.
+  public let source: ProjectSource
+  public let outcome: Outcome
+
+  public init(source: ProjectSource, outcome: Outcome) {
+    self.source = source
+    self.outcome = outcome
+  }
+
+  public var text: String? {
+    switch outcome {
+    case .running: return nil
+    case let .succeeded(references, seconds):
+      let counted = "\(references) \(references == 1 ? "reference" : "references")"
+      return "\(counted) · \(String(format: "%.1f", seconds)) s"
+    case let .failed(line, _): return line
+    }
+  }
+}
+
+/// A source named by its project and label.
+public struct CommandTestKey: Hashable, Sendable {
+  public let project: String
+  public let label: String
+
+  public init(project: String, label: String) {
+    self.project = project
+    self.label = label
   }
 }
 
@@ -167,6 +216,17 @@ public struct CatalogUsageSynchronizer: UsageSyncing {
     }.value
   }
 
+  public func testCommand(project: String, source: ProjectSource) async throws -> Int {
+    let database = database
+    let policy = approvals?.policy ?? .deny
+    let runner = runner
+    return try await Task.detached {
+      try UsageScanner.scan(
+        project: project, in: database, only: source, commands: policy, runner: runner
+      ).document.refs.count
+    }.value
+  }
+
   public func scan(
     project: String, allowEmpty: Bool, progress: @escaping @Sendable (Int) -> Void
   ) async throws -> UsageScanOutcome {
@@ -208,6 +268,12 @@ private enum QueuedScan: Hashable {
   case manual([String], UsageSyncPresenter)
 }
 
+/// What allowing the pending command goes on to do.
+private enum CommandApprovalPurpose {
+  case scan
+  case test(ProjectSource)
+}
+
 /// The empty scan waiting for confirmation: a chosen document, or one
 /// project's Scan Now.
 private enum PendingEmptyUsageSync: Sendable {
@@ -225,9 +291,14 @@ public final class UsageSyncModel: ObservableObject {
   @Published public private(set) var errorMessage: String?
   @Published public private(set) var requiresEmptyScanConfirmation = false
   @Published public private(set) var emptyScanPresenter: UsageSyncPresenter = .settings
-  /// The command a Scan Now stopped at. Only a scan the user asked for sets it.
+  /// The command a Scan Now or a Test Run stopped at. Only something the
+  /// user asked for sets it.
   @Published public private(set) var pendingCommandApproval: PendingCommandApproval?
   @Published public private(set) var commandApprovalPresenter: UsageSyncPresenter = .settings
+  /// The test runs of this launch, by source.
+  @Published public private(set) var commandTests: [CommandTestKey: CommandTest] = [:] {
+    didSet { onCommandTestsChange?(commandTests) }
+  }
   @Published public private(set) var scanActivity: UsageScanActivity? {
     didSet { onScanActivityChange?(scanActivity) }
   }
@@ -236,11 +307,14 @@ public final class UsageSyncModel: ObservableObject {
   /// reload once a scan has been ingested.
   public var onScanActivityChange: ((UsageScanActivity?) -> Void)?
   public var onScanCompleted: (() async -> Void)?
+  public var onCommandTestsChange: (([CommandTestKey: CommandTest]) -> Void)?
 
   private let synchronizer: UsageSyncing
   private let chooseSource: @MainActor () -> URL?
   private var pendingEmptySync: PendingEmptyUsageSync?
   private let approvals: CommandApprovalStore?
+  private let scanMarks: AutomaticScanMarks?
+  private var commandApprovalPurpose = CommandApprovalPurpose.scan
   /// Everything that writes usage runs one at a time, in the order asked.
   private var lastInLine: Task<Void, Never>?
   private var waiting: [QueuedScan: Task<Void, Never>] = [:]
@@ -252,10 +326,12 @@ public final class UsageSyncModel: ObservableObject {
   public init(
     synchronizer: UsageSyncing,
     approvals: CommandApprovalStore? = nil,
+    scanMarks: AutomaticScanMarks? = nil,
     chooseSource: @escaping @MainActor () -> URL?
   ) {
     self.synchronizer = synchronizer
     self.approvals = approvals
+    self.scanMarks = scanMarks
     self.chooseSource = chooseSource
   }
 
@@ -326,13 +402,77 @@ public final class UsageSyncModel: ObservableObject {
     pendingCommandApproval = nil
   }
 
-  /// Allows the pending command on this Mac and scans its project again,
-  /// which stops at the project's next command not yet allowed, if any.
-  public func confirmCommand() async {
-    guard let pending = pendingCommandApproval, let approvals else { return }
+  /// Allows the pending command on this Mac and goes on with what stopped at
+  /// it: the test run, or a scan of the project, which stops at the project's
+  /// next command not yet allowed, if any. With `shown`, nothing is allowed
+  /// unless it is still the command pending, so what is allowed is what the
+  /// user read.
+  public func confirmCommand(_ shown: PendingCommandApproval? = nil) async {
+    guard let pending = pendingCommandApproval, shown == nil || shown == pending, let approvals
+    else { return }
+    let purpose = commandApprovalPurpose
     pendingCommandApproval = nil
     approvals.approve(project: pending.project, source: pending.source)
-    await scanNow(projects: [pending.project], presenter: commandApprovalPresenter)
+    switch purpose {
+    case .scan:
+      await scanNow(projects: [pending.project], presenter: commandApprovalPresenter)
+    case let .test(source):
+      await run(test: source, project: pending.project)
+    }
+  }
+
+  /// Test Run: runs one command source and writes nothing. A command not yet
+  /// allowed stops at the same confirmation a scan does. It does not wait in
+  /// the scans' line, which only orders what writes usage.
+  public func testCommand(
+    project: String, source: ProjectSource, presenter: UsageSyncPresenter
+  ) async {
+    let key = CommandTestKey(project: project, label: source.label)
+    guard source.kind == .command, commandTests[key]?.outcome != .running else { return }
+    guard approvals?.isApproved(project: project, source: source) == true else {
+      commandTests[key] = nil
+      requestApproval(
+        PendingCommandApproval(
+          project: project, label: source.label, command: source.command,
+          workingDirectory: source.workingDirectory),
+        for: .test(source), presenter: presenter)
+      return
+    }
+    await run(test: source, project: project)
+  }
+
+  private func run(test source: ProjectSource, project: String) async {
+    let key = CommandTestKey(project: project, label: source.label)
+    commandTests[key] = CommandTest(source: source, outcome: .running)
+    let started = ContinuousClock.now
+    let outcome: CommandTest.Outcome
+    do {
+      let references = try await synchronizer.testCommand(project: project, source: source)
+      let elapsed = (ContinuousClock.now - started).components
+      outcome = .succeeded(
+        references: references,
+        seconds: Double(elapsed.seconds) + Double(elapsed.attoseconds) * 1e-18)
+    } catch let CommandSourceError.commandFailed(_, status, stderrTail) {
+      // The last line a failing command printed usually says why.
+      let last = stderrTail.split(whereSeparator: \.isNewline).last.map(String.init)
+      let head = "Exited with status \(status)"
+      outcome = .failed(
+        line: last.map { "\(head): \($0)" } ?? head,
+        detail: stderrTail.isEmpty ? head : "\(head)\n\(stderrTail)")
+    } catch {
+      let text = message(for: error)
+      outcome = .failed(line: text, detail: text)
+    }
+    commandTests[key] = CommandTest(source: source, outcome: outcome)
+  }
+
+  private func requestApproval(
+    _ approval: PendingCommandApproval, for purpose: CommandApprovalPurpose,
+    presenter: UsageSyncPresenter
+  ) {
+    commandApprovalPurpose = purpose
+    commandApprovalPresenter = presenter
+    pendingCommandApproval = approval
   }
 
   public func isEmptyScanConfirmationPresented(by presenter: UsageSyncPresenter) -> Bool {
@@ -387,6 +527,7 @@ public final class UsageSyncModel: ObservableObject {
   private func automaticScan(_ project: String) async {
     do {
       let outcome = try await runScan(project, allowEmpty: false)
+      scanMarks?.record(project: project, scanID: outcome.sync.scanID)
       scanActivity = .finished(project: project, references: outcome.sync.foundCount)
       await onScanCompleted?()
     } catch let UsageCatalogError.emptyScanRejected(previousFoundCount) {
@@ -406,8 +547,7 @@ public final class UsageSyncModel: ObservableObject {
       scanActivity = .finished(project: project, references: outcome.sync.foundCount)
       await onScanCompleted?()
     } catch let error as CommandApprovalRequired {
-      commandApprovalPresenter = presenter
-      pendingCommandApproval = error.approval
+      requestApproval(error.approval, for: .scan, presenter: presenter)
       scanActivity = nil
     } catch let error as UsageCatalogError {
       if case .emptyScanRejected = error, !allowEmpty {

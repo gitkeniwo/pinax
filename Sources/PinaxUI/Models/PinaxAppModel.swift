@@ -94,6 +94,7 @@ public final class PinaxAppModel: ObservableObject {
   private let scanClock: ScanClock
   private let wakeNotifications: NotificationCenter
   private let chooseSourceFolder: @MainActor (String?) -> URL?
+  private let chooseRunFolder: @MainActor (String?) -> URL?
   /// The backup panels and the credential lookup behind a restore's
   /// follow-ups: injected so tests open no panel and read no
   /// Keychain.
@@ -123,6 +124,8 @@ public final class PinaxAppModel: ObservableObject {
     scanClock: ScanClock = SystemScanClock(),
     wakeNotifications: NotificationCenter = NSWorkspace.shared.notificationCenter,
     chooseSourceFolder: @escaping @MainActor (String?) -> URL? = SourceFolderOpenPanel.choose,
+    chooseRunFolder: @escaping @MainActor (String?) -> URL? =
+      SourceFolderOpenPanel.chooseRunFolder,
     chooseBackupFile: @escaping @MainActor () -> URL? = BackupOpenPanel.choose,
     chooseBackupDestination: @escaping @MainActor (String) -> URL? = BackupSavePanel.choose(
       defaultFilename:),
@@ -143,6 +146,7 @@ public final class PinaxAppModel: ObservableObject {
     self.scanClock = scanClock
     self.wakeNotifications = wakeNotifications
     self.chooseSourceFolder = chooseSourceFolder
+    self.chooseRunFolder = chooseRunFolder
     let preferences = PreferencesStore(defaults: defaults)
     self.preferences = preferences
     Clipboard.onCopy = { [weak self] in self?.menuBarActivity.noteCopy() }
@@ -181,7 +185,7 @@ public final class PinaxAppModel: ObservableObject {
         chooseDestination: ManifestSavePanel.choose(defaultFilename:))
       let settings = ProjectSettingsModel(
         store: CatalogProjectSettingsStore(database: database),
-        chooseFolder: chooseSourceFolder)
+        chooseFolder: chooseSourceFolder, chooseRunFolder: chooseRunFolder)
       settings.load()
       let galleryModel = GalleryModel(
         catalog: ReadOnlyCatalog(database: database),
@@ -396,11 +400,13 @@ public final class PinaxAppModel: ObservableObject {
         await backupModel?.beginRestore(presenter: .gallery)
       }
       backup = backupModel
+      let scanMarks = AutomaticScanMarks(defaults: defaults)
       let usageSyncModel = UsageSyncModel(
         synchronizer: usageSynchronizer?(database)
           ?? CatalogUsageSynchronizer(
             database: database, approvals: commandApprovals, runner: commandRunner),
         approvals: commandApprovals,
+        scanMarks: scanMarks,
         chooseSource: UsageDocumentOpenPanel.choose)
       usageSync = usageSyncModel
       // One Scan Now. The Projects page and the reports'
@@ -410,6 +416,15 @@ public final class PinaxAppModel: ObservableObject {
       settings.scanNow = { [weak usageSyncModel] slug in
         Task { await usageSyncModel?.scanNow(projects: [slug], presenter: .settings) }
       }
+      settings.testCommand = { [weak usageSyncModel] slug, source in
+        Task {
+          await usageSyncModel?.testCommand(project: slug, source: source, presenter: .settings)
+        }
+      }
+      usageSyncModel.onCommandTestsChange = { [weak settings] tests in
+        settings?.commandTests = tests
+      }
+      settings.automaticScanID = { scanMarks.scanID(project: $0) }
       galleryModel.onScanNow = { [weak usageSyncModel] slugs in
         Task { await usageSyncModel?.scanNow(projects: slugs, presenter: .gallery) }
       }
