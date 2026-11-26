@@ -68,7 +68,9 @@ struct AssetListCursor: Codable {
     let token = AssetListCursor(
       field: sort.field.rawValue, direction: sort.direction.rawValue,
       value: cursor.sortValue, id: cursor.id)
-    return try JSONEncoder().encode(token).base64EncodedString()
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = .sortedKeys
+    return try encoder.encode(token).base64EncodedString()
       .replacingOccurrences(of: "+", with: "-")
       .replacingOccurrences(of: "/", with: "_")
       .replacingOccurrences(of: "=", with: "")
