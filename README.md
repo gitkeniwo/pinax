@@ -166,6 +166,24 @@ pinax url 431ced
 pinax show 431ced
 ```
 
+`pinax url` takes several assets and prints one line each, as plain URLs or with
+`--format markdown` or `--format html`.
+
+`--template` on `url`, `ls`, and `upload` prints one line per asset from your own text, with the
+placeholders of the app's Copy As formats: `{url}`, `{filename}`, `{name}`, `{width}`,
+`{height}`, `{key}`, and `{project}`. It cannot be combined with `--format`.
+
+```sh
+pinax ls --project blog --template '![{name}]({url})'
+```
+
+Download originals into a folder. Each file is checked against the catalog's SHA-256 and saved
+under its original filename; an existing file is never overwritten.
+
+```sh
+pinax get 431ced blog/202608/photo.png -o ~/Downloads
+```
+
 `pinax show` includes the full asset record, tags, and each associated project's live usage count.
 
 Export a versioned manifest. The schema is `Schemas/pinax-manifest-v1.schema.json`.

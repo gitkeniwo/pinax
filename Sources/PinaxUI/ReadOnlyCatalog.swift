@@ -29,27 +29,7 @@ public struct ReadOnlyCatalog: Sendable, ExternalUsageReading {
   /// be ready before rows are published, but fetching full details once per
   /// cell would turn a 120-row page into 120 database round trips.
   public func projectMemberships(assetIDs: [Int64]) async throws -> [Int64: Set<String>] {
-    guard !assetIDs.isEmpty else { return [:] }
-    return try await database.read { db in
-      let placeholders = Array(repeating: "?", count: assetIDs.count).joined(separator: ",")
-      let rows = try Row.fetchAll(
-        db,
-        sql: """
-          SELECT ap.asset_id, p.slug
-          FROM asset_project ap
-          JOIN project p ON p.id = ap.project_id
-          WHERE ap.asset_id IN (\(placeholders))
-          """,
-        arguments: StatementArguments(assetIDs)
-      )
-      var result: [Int64: Set<String>] = [:]
-      for row in rows {
-        let assetID: Int64 = row["asset_id"]
-        let slug: String = row["slug"]
-        result[assetID, default: []].insert(slug)
-      }
-      return result
-    }
+    try await CatalogAssets.projectMemberships(assetIDs: assetIDs, in: database)
   }
 
   public func tagSummaries() async throws -> [TagSummary] {

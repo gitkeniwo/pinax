@@ -55,6 +55,12 @@ struct UploadCommand: AsyncParsableCommand {
       """)
   var compress: Bool?
 
+  @OptionGroup var template: CopyTemplateOption
+
+  func validate() throws {
+    try template.validate(hasFormat: format != nil)
+  }
+
   mutating func run() async throws {
     guard clipboard || !paths.isEmpty else {
       throw ValidationError("Provide at least one path or use --clipboard.")
@@ -125,7 +131,12 @@ struct UploadCommand: AsyncParsableCommand {
     }
     if !outcomes.isEmpty {
       let output: String
-      if dryRun, format == nil {
+      if let template = template.template {
+        output = try templateLines(
+          template, for: outcomes, backend: selectedBackend,
+          plannedProject: dryRun ? selectedProject : nil, in: database
+        ).joined(separator: "\n")
+      } else if dryRun, format == nil {
         output = outcomes.map { outcome in
           "\(outcome.deduplicated ? "dedupe" : "upload")\t\(outcome.key)"
         }.joined(separator: "\n")
@@ -145,6 +156,31 @@ struct UploadCommand: AsyncParsableCommand {
     }
     if !failures.isEmpty {
       throw ExitCode(CLIExit.code(forAll: failures))
+    }
+  }
+
+  /// `template` filled in for each upload. A project's asset carries the
+  /// catalog's memberships; `plannedProject` is the one a dry run would add,
+  /// since it writes none.
+  func templateLines(
+    _ template: String, for outcomes: [UploadOutcome], backend: Backend,
+    plannedProject: Project?, in database: CatalogDatabasePool
+  ) throws -> [String] {
+    try outcomes.map { outcome in
+      var projects = try CatalogAssets.projectSlugs(
+        sha256: outcome.sha256, backendID: backend.id, in: database)
+      if let plannedProject {
+        projects.insert(plannedProject.slug)
+      }
+      // An asset with no original filename is reported under its key.
+      let filename =
+        outcome.originalFilename == outcome.key
+        ? (outcome.key as NSString).lastPathComponent : outcome.originalFilename
+      return CopyTemplate.render(
+        template,
+        fields: CopyFields(
+          url: outcome.url, filename: filename, width: outcome.width, height: outcome.height,
+          key: outcome.key, projects: projects.sorted()))
     }
   }
 
