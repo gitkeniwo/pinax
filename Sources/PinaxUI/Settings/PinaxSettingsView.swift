@@ -57,6 +57,8 @@ public struct PinaxSettingsView: View {
     .frame(width: Metrics.windowWidth(for: app.settingsTab, sidebar: sidebarWidth))
     .frame(minHeight: Metrics.minHeight, idealHeight: Metrics.idealHeight, maxHeight: .infinity)
     .background(SettingsWindowChrome())
+    // On the window, not a page: a Scan Now from Backends asks here too.
+    .commandApprovalSheet(app.usageSync, presenter: .settings)
   }
 
   /// A strip astride the sidebar's edge that drags its width.

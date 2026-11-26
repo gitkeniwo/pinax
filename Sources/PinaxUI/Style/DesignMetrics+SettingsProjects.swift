@@ -19,6 +19,20 @@ extension DesignMetrics.settings {
   /// 64 wide) and the fields `s` apart.
   public static let sourceFieldLabelWidth: CGFloat = 64
   public static let sourceFieldSpacing = DesignMetrics.spacing.s
+  /// A command source's row: "in <folder>" at most this wide, cut in the
+  /// middle; `s` between the sources' group and the automation one.
+  public static let sourceRunsInMaxWidth: CGFloat = 170
+  public static let sourceGroupSpacing = DesignMetrics.spacing.s
+  /// A test run's symbol and its words.
+  public static let commandTestSpacing: CGFloat = 6
+  /// The command confirmation: 440 wide; a command too long for the sheet
+  /// scrolls inside this height. Its card: 10 in, 12 at the sides, the two
+  /// lines `xs` apart, a 10 corner.
+  public static let commandSheetWidth: CGFloat = 440
+  public static let commandSheetCommandMaxHeight: CGFloat = 240
+  public static let commandCardVerticalPadding: CGFloat = 10
+  public static let commandCardHorizontalPadding = DesignMetrics.spacing.m
+  public static let commandCardRadius: CGFloat = 10
 
   /// Backends ▸ Connection: the copy glyph (`svg` 14, the button 2 × 4 in —
   /// tiers `xs` both ways, 2 off → 4 kept as `xs` for the side only).
