@@ -8,6 +8,9 @@ public enum CatalogConfigurationError: Error, Equatable, CustomStringConvertible
   case invalidSourceLabel(String)
   case duplicateSourceLabel(String)
   case relativeSourcePath(String)
+  case emptySourceCommand(label: String)
+  case sourceCommandTooLong(label: String)
+  case relativeWorkingDirectory(String)
   case tooManySources(Int)
   case projectMetaNotObject(String)
   case sourceNotFound(project: String, label: String)
@@ -34,6 +37,13 @@ public enum CatalogConfigurationError: Error, Equatable, CustomStringConvertible
       return "Source label '\(label)' is already used in this project."
     case let .relativeSourcePath(path):
       return "Source path '\(path)' must be absolute."
+    case let .emptySourceCommand(label):
+      return "Source '\(label)' needs a command."
+    case let .sourceCommandTooLong(label):
+      return
+        "Source '\(label)' has a command longer than \(ProjectSource.maximumCommandLength) characters."
+    case let .relativeWorkingDirectory(path):
+      return "Working directory '\(path)' must be absolute."
     case let .tooManySources(count):
       return "A project has at most \(ProjectSettings.maximumSources) sources; got \(count)."
     case let .projectMetaNotObject(slug):
@@ -354,8 +364,10 @@ public enum CatalogConfiguration {
 
   /// Replaces a project's sources. Labels must match
   /// `ProjectSettings`' label rule and be unique
-  /// within the project, paths must be absolute (they are stored
-  /// standardized), and a project has at most 16 sources. Every other key in
+  /// within the project, paths and working directories must be absolute
+  /// (they are stored standardized), a command is stored trimmed, not empty
+  /// and at most `ProjectSource.maximumCommandLength` characters, and a
+  /// project has at most 16 sources. Every other key in
   /// `meta` is kept; a `meta` that is not a JSON object is left untouched
   /// and the write is refused.
   @discardableResult
@@ -377,11 +389,33 @@ public enum CatalogConfiguration {
       guard seen.insert(source.label).inserted else {
         throw CatalogConfigurationError.duplicateSourceLabel(source.label)
       }
-      guard source.path.hasPrefix("/") else {
-        throw CatalogConfigurationError.relativeSourcePath(source.path)
+      switch source.kind {
+      case .folder:
+        guard source.path.hasPrefix("/") else {
+          throw CatalogConfigurationError.relativeSourcePath(source.path)
+        }
+        source.path = URL(fileURLWithPath: source.path).standardizedFileURL.path
+        normalized.append(
+          ProjectSource(
+            label: source.label, path: source.path, include: source.include,
+            exclude: source.exclude))
+      case .command:
+        let command = source.command.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !command.isEmpty else {
+          throw CatalogConfigurationError.emptySourceCommand(label: source.label)
+        }
+        guard command.count <= ProjectSource.maximumCommandLength else {
+          throw CatalogConfigurationError.sourceCommandTooLong(label: source.label)
+        }
+        guard source.workingDirectory.hasPrefix("/") else {
+          throw CatalogConfigurationError.relativeWorkingDirectory(source.workingDirectory)
+        }
+        normalized.append(
+          ProjectSource(
+            label: source.label, command: command,
+            workingDirectory: URL(fileURLWithPath: source.workingDirectory)
+              .standardizedFileURL.path))
       }
-      source.path = URL(fileURLWithPath: source.path).standardizedFileURL.path
-      normalized.append(source)
     }
     return try updateProjectMeta(slug: slug, in: database, now: now) { object in
       object["sources"] = normalized.map(\.json)
@@ -413,6 +447,18 @@ public enum CatalogConfiguration {
       var compression = object["compression"].map(ProjectCompression.init(json:)) ?? ProjectCompression()
       change(&compression)
       object["compression"] = compression.json
+    }
+  }
+
+  @discardableResult
+  public static func setAutoScan(
+    slug: String,
+    _ autoScan: ProjectAutoScan,
+    in database: DatabasePool,
+    now: Date = Date()
+  ) throws -> ProjectSettings {
+    try updateProjectMeta(slug: slug, in: database, now: now) { object in
+      object["autoScan"] = autoScan.json
     }
   }
 

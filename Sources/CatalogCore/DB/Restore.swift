@@ -240,7 +240,7 @@ extension CatalogBackups {
         return !(try credentialExists(backend.keychainRef))
       }.map(\.slug),
       projectsWithMissingSources: projects.compactMap { project in
-        let missing = ProjectSettings(meta: project.meta).sources.map(\.path)
+        let missing = ProjectSettings(meta: project.meta).sources.map(\.directory)
           .filter { !folderExists($0) }
         return missing.isEmpty
           ? nil

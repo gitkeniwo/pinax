@@ -48,7 +48,7 @@ struct UsageSyncCommand: ParsableCommand {
 struct UsageScanCommand: ParsableCommand {
   static let configuration = CommandConfiguration(
     commandName: "scan",
-    abstract: "Scan a project's source folders and ingest the result."
+    abstract: "Scan a project's sources and ingest the result."
   )
 
   @Option(name: .long)
@@ -56,6 +56,9 @@ struct UsageScanCommand: ParsableCommand {
 
   @Flag(name: .long, help: "Print the usage document instead of ingesting it.")
   var dryRun = false
+
+  @Flag(name: .long, help: "Run the project's command sources, with or without --dry-run.")
+  var runCommands = false
 
   @Flag(name: .long, help: "Accept an empty scan after a nonempty scan.")
   var allowEmpty = false
@@ -67,11 +70,28 @@ struct UsageScanCommand: ParsableCommand {
   /// `--dry-run`: the document as JSON, nothing written. Otherwise the
   /// `usage sync` line, then `F files, S skipped`.
   func output(in database: CatalogDatabasePool) throws -> String {
-    let scan = try UsageScanner.scan(project: project, in: database)
+    let scan: UsageScanResult
+    do {
+      scan = try UsageScanner.scan(
+        project: project, in: database, commands: runCommands ? .allow : .deny)
+    } catch let error as CommandSourceError {
+      guard case let .commandNotAllowed(label) = error else { throw error }
+      throw RunCommandsRequired(label: label)
+    }
     if dryRun { return try encodedJSON(scan.document) }
     let result = try CatalogUsage.sync(
       scan.document, project: project, in: database, allowEmpty: allowEmpty)
     return "scan \(result.scanID): \(result.foundCount) refs\n\(scan.files) files, \(scan.skipped) skipped"
+  }
+}
+
+/// A scan reached a command source without `--run-commands`.
+struct RunCommandsRequired: Error, Equatable, CustomStringConvertible {
+  let label: String
+
+  var description: String {
+    "\(CommandSourceError.commandNotAllowed(label: label).description) "
+      + "Add --run-commands to run this project's commands."
   }
 }
 

@@ -84,6 +84,25 @@ import Testing
     #expect(!result.stderr.contains("Usage:"))
   }
 
+  @Test("A command source without --run-commands is 77, without usage")
+  func commandNotAllowed() throws {
+    let (database, directory) = try makeCLITestDatabase()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    try CatalogConfiguration.setProjectSources(
+      slug: "blog",
+      [ProjectSource(label: "cms", command: "echo ran > marker", workingDirectory: directory.path)],
+      in: database)
+    let result = try CLIProcess.run(["usage", "scan", "--project", "blog"], in: directory)
+    #expect(result.status == 77)
+    #expect(
+      result.stderr
+        == "Error: Source 'cms' runs a command that has not been allowed to run. "
+        + "Add --run-commands to run this project's commands.\n")
+    #expect(result.stdout.isEmpty)
+    #expect(
+      !FileManager.default.fileExists(atPath: directory.appendingPathComponent("marker").path))
+  }
+
   @Test("Missing credentials are 78, without usage")
   func missingCredentials() throws {
     let result = try run(["reindex", "--backend", "r2", "--dry-run"])
@@ -114,6 +133,7 @@ import Testing
       (UsageScanError.sourceNotFound(label: "x", path: "y"), 66),
       (CatalogRestoreError.catalogNotEmpty(CatalogTableCounts()), 77),
       (DatabaseLocationError.unsafePath("x"), 77),
+      (RunCommandsRequired(label: "x"), 77),
       (S3UploaderError.http(statusCode: 500, body: ""), 69),
       (S3UploaderError.invalidResponse, 69),
       (S3UploaderError.invalidEndpoint("x"), nil),

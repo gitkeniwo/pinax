@@ -66,6 +66,8 @@ enum CLIExit {
       return nil
     case is DatabaseLocationError:
       return refused
+    case is RunCommandsRequired:
+      return refused
     case let error as S3UploaderError:
       switch error {
       case .http, .invalidResponse: return remote
