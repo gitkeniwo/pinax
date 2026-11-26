@@ -120,7 +120,7 @@ public final class PinaxAppModel: ObservableObject {
     credentialExists: @escaping @Sendable (String) throws -> Bool = {
       try Keychain().load(for: $0) != nil
     },
-    deletionRemote: @escaping DeletionRemote = { try DeletingCatalog.keychainRemote($0) }
+    deletionRemote: @escaping DeletionRemote = { try CatalogDeletion.keychainRemote($0) }
   ) {
     self.deletionRemote = deletionRemote
     self.chooseBackupFile = chooseBackupFile
