@@ -93,6 +93,7 @@ extension ExternalsModel {
     migrationRefusal = nil
     migrationDiff = nil
     migrationAllowedSources = []
+    migrationCompression = []
     migrationPreparedFailures = [:]
     migrationStatus = nil
     onMigrationProgress()
@@ -102,6 +103,17 @@ extension ExternalsModel {
   public func dismissMigrationSheet() {
     isMigrationSheetPresented = false
     migrationDiff = nil
+  }
+
+  /// What apply is told: ticked compresses every image with its project's
+  /// settings, unticked compresses none. Mixed (the projects disagree and
+  /// the box was left alone) follows each project's own switch.
+  /// With no box (nothing to upload) it follows the projects.
+  public var migrationCompressionChoice: CompressionChoice {
+    if migrationCompression.isEmpty { return .project }
+    if migrationCompression.allSatisfy({ $0 }) { return .on }
+    if migrationCompression.allSatisfy({ !$0 }) { return .off }
+    return .project
   }
 
   public func setMigrationSource(_ id: String, allowed: Bool) {
@@ -150,12 +162,13 @@ extension ExternalsModel {
     isMigrating = true
     migrationStatus = total > 0
       ? .uploading(done: 0, total: total, host: nil, isStopping: false) : .rewriting(files: files)
+    let compression = migrationCompressionChoice
     let cancellation = ExternalMigrationCancellation()
     migrationCancellation = cancellation
     let outcome = await run { progress in
       try await migrator.apply(
         fromRun: confirmation.runID, allowedSources: self.migrationAllowedSources,
-        cancellation: cancellation, progress: progress)
+        compression: compression, cancellation: cancellation, progress: progress)
     } onProgress: { [weak self] progress in
       guard let self, case let .uploading(_, _, _, isStopping)? = self.migrationStatus else { return }
       if progress.done >= progress.total, !isStopping {
@@ -171,6 +184,7 @@ extension ExternalsModel {
     case let .success(result):
       migrationConfirmation = nil
       migrationAllowedSources = []
+      migrationCompression = []
       migrationStatus = .result(result)
       var failures = migrationFailures
       for url in migrationTargets.flatMap(\.urls) { failures[url] = nil }
@@ -205,6 +219,7 @@ extension ExternalsModel {
     migrationRefusal = nil
     migrationDiff = nil
     migrationAllowedSources = []
+    migrationCompression = []
     migrationStatus = .preparing(done: 0, total: total, host: nil)
     let cancellation = ExternalMigrationCancellation()
     migrationCancellation = cancellation
@@ -224,6 +239,7 @@ extension ExternalsModel {
     case let .success(preparation):
       let confirmation = ExternalMigrationConfirmation.make(preparation)
       migrationConfirmation = confirmation
+      migrationCompression = confirmation.compressionDefaults
       migrationSummary = preparation.result.summary.migration
       migrationPreparedFailures = ExternalMigrationFailure.make(preparation.result.events)
       migrationStatus = .ready(runID: confirmation.runID, links: confirmation.links)

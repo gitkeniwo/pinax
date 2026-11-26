@@ -116,6 +116,9 @@ public final class ExternalsModel: ObservableObject {
   /// `project/label` of the unclean sources ticked Write anyway; none at
   /// first.
   @Published public internal(set) var migrationAllowedSources: Set<String> = []
+  /// Compress images, one value per target project, starting as each
+  /// project's switch; ticking or unticking the box sets them all.
+  @Published public var migrationCompression: [Bool] = []
   /// Why the last Migrate was refused, shown in the sheet.
   @Published public internal(set) var migrationRefusal: ExternalMigrationRefusal?
   /// Show Changes…'s text; non-nil shows the nested sheet.

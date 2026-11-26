@@ -25,12 +25,15 @@ public struct ProjectSettingsRow: Identifiable, Equatable, Sendable {
   public let autoScan: ProjectAutoScan
   /// The latest completed scan's id; nil before the first scan.
   public let lastScanID: Int64?
+  /// `meta.compression`: whether uploads into the project are compressed, and how.
+  public let compression: ProjectCompression
 
   public init(
     id: Int64, slug: String, name: String, keyPrefix: String, backendSlug: String?,
     sources: [ProjectSource] = [], lastScanAt: String? = nil, referenceCount: Int = 0,
     usageTracking: UsageTracking = .tracked, keyTemplate: String? = nil,
-    autoScan: ProjectAutoScan = .off, lastScanID: Int64? = nil
+    autoScan: ProjectAutoScan = .off, lastScanID: Int64? = nil,
+    compression: ProjectCompression = ProjectCompression()
   ) {
     self.id = id
     self.slug = slug
@@ -44,6 +47,7 @@ public struct ProjectSettingsRow: Identifiable, Equatable, Sendable {
     self.usageTracking = usageTracking
     self.autoScan = autoScan
     self.lastScanID = lastScanID
+    self.compression = compression
   }
 }
 
@@ -138,6 +142,7 @@ public protocol ProjectSettingsStore: Sendable {
   func setSources(_ sources: [ProjectSource], projectSlug: String) throws
   func setUsageTracking(_ tracking: UsageTracking, projectSlug: String) throws
   func setAutoScan(_ autoScan: ProjectAutoScan, projectSlug: String) throws
+  func setCompression(_ compression: ProjectCompression, projectSlug: String) throws
 }
 
 /// Production store. Every write goes through `CatalogConfiguration` — the
@@ -176,7 +181,8 @@ public struct CatalogProjectSettingsStore: ProjectSettingsStore {
         usageTracking: settings.usageTracking,
         keyTemplate: project.keyTemplate,
         autoScan: settings.autoScan,
-        lastScanID: project.lastScanID
+        lastScanID: project.lastScanID,
+        compression: settings.compression
       )
     }
     return ProjectSettingsSnapshot(
@@ -216,6 +222,10 @@ public struct CatalogProjectSettingsStore: ProjectSettingsStore {
 
   public func setAutoScan(_ autoScan: ProjectAutoScan, projectSlug: String) throws {
     try CatalogConfiguration.setAutoScan(slug: projectSlug, autoScan, in: database)
+  }
+
+  public func setCompression(_ compression: ProjectCompression, projectSlug: String) throws {
+    try CatalogConfiguration.setCompression(slug: projectSlug, in: database) { $0 = compression }
   }
 
   public func addProject(_ draft: NewProjectDraft) async throws -> ProjectSettingsSnapshot {
@@ -497,6 +507,17 @@ public final class ProjectSettingsModel: ObservableObject {
   public func setUsageTracking(_ tracking: UsageTracking, forProject slug: String) {
     commit { try store.setUsageTracking(tracking, projectSlug: slug) }
     if saveError == nil { onUsageTrackingChange?() }
+  }
+
+  /// A Compression control's write: the row's stored value with one field
+  /// changed, written at once.
+  public func setCompression(
+    forProject slug: String, _ change: (inout ProjectCompression) -> Void
+  ) {
+    guard let row = row(slug) else { return }
+    var compression = row.compression
+    change(&compression)
+    commit { try store.setCompression(compression, projectSlug: slug) }
   }
 
   public var canBeginAddition: Bool {
