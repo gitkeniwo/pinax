@@ -94,7 +94,7 @@ public enum UsageScanner {
     guard !sources.isEmpty else { throw UsageScanError.noSources(slug) }
     // Asked before anything is read or run, so one command that is not
     // allowed keeps the others from running too.
-    for source in sources where source.kind == .command && !commands.allows(source) {
+    for source in sources where source.kind == .command && !commands.allows(source, in: slug) {
       throw CommandSourceError.commandNotAllowed(label: source.label)
     }
     var references = Set<UsageReference.Identity>()
@@ -225,7 +225,8 @@ public enum UsageScanner {
     return result.sorted()
   }
 
-  static func isBuiltInExclusion(_ name: String) -> Bool {
+  /// A file or folder name a source never includes, whatever its patterns.
+  public static func isBuiltInExclusion(_ name: String) -> Bool {
     name.hasPrefix(".") || name == "node_modules" || name == "dist" || name == "build"
   }
 

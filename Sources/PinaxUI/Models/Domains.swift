@@ -124,11 +124,18 @@ public struct CatalogDomainMigrator: DomainMigrating {
   private let database: DatabasePool
   private let verifier: any RewriteTargetVerifying
   private let git: any GitStatusProviding
+  /// For the rescans after an apply.
+  let commands: CommandSourcePolicy
+  private let runner: any CommandSourceRunning
 
   public init(
     database: DatabasePool, verifier: any RewriteTargetVerifying = PublicTargetVerifier(),
-    git: any GitStatusProviding = GitStatusProvider()
+    git: any GitStatusProviding = GitStatusProvider(),
+    commands: CommandSourcePolicy = .deny,
+    runner: any CommandSourceRunning = ShellCommandRunner()
   ) {
+    self.commands = commands
+    self.runner = runner
     self.database = database
     self.verifier = verifier
     self.git = git
@@ -171,9 +178,12 @@ public struct CatalogDomainMigrator: DomainMigrating {
   ) async throws -> RewriteApplyResult {
     let database = database
     let git = git
+    let commands = commands
+    let runner = runner
     return try await Task.detached {
       try DomainMigration.apply(
-        fromRun: runID, allowedSources: allowedSources, database: database, git: git, phase: phase)
+        fromRun: runID, allowedSources: allowedSources, database: database, git: git,
+        commands: commands, runner: runner, phase: phase)
     }.value
   }
 

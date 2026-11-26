@@ -68,6 +68,8 @@ public final class PinaxAppModel: ObservableObject {
   /// Whether the catalog is empty, mirrored from the
   /// backup model so File ▸ Import / Export re-evaluate.
   @Published public private(set) var isCatalogEmpty: Bool?
+  /// The folder watcher and the schedule, from the moment the catalog opens.
+  private(set) var autoScan: AutoScanEngine?
   /// How many times a restore has reloaded the catalog's readers.
   public private(set) var catalogRestoreReloads = 0
 
@@ -84,7 +86,13 @@ public final class PinaxAppModel: ObservableObject {
   private let databaseOpener: () throws -> DatabasePool
   /// Scan Now's synchronizer and the Sources table's folder chooser are
   /// injected so tests record the scan and never open a panel.
-  private let usageSynchronizer: (DatabasePool) -> UsageSyncing
+  private let usageSynchronizer: ((DatabasePool) -> UsageSyncing)?
+  /// Which commands this Mac allows, and what runs them: shared by every
+  /// scan the app starts, an apply's rescans included.
+  let commandApprovals: CommandApprovalStore
+  private let commandRunner: CommandSourceRunning
+  private let scanClock: ScanClock
+  private let wakeNotifications: NotificationCenter
   private let chooseSourceFolder: @MainActor (String?) -> URL?
   /// The backup panels and the credential lookup behind a restore's
   /// follow-ups: injected so tests open no panel and read no
@@ -110,9 +118,10 @@ public final class PinaxAppModel: ObservableObject {
     dockIcon: @MainActor (PreferencesStore) -> DockIconApplier = DockIconApplier.system,
     defaults: UserDefaults = .standard,
     databaseOpener: @escaping () throws -> DatabasePool = { try PinaxAppModel.openCatalog() },
-    usageSynchronizer: @escaping (DatabasePool) -> UsageSyncing = {
-      CatalogUsageSynchronizer(database: $0)
-    },
+    usageSynchronizer: ((DatabasePool) -> UsageSyncing)? = nil,
+    commandRunner: CommandSourceRunning = ShellCommandRunner(),
+    scanClock: ScanClock = SystemScanClock(),
+    wakeNotifications: NotificationCenter = NSWorkspace.shared.notificationCenter,
     chooseSourceFolder: @escaping @MainActor (String?) -> URL? = SourceFolderOpenPanel.choose,
     chooseBackupFile: @escaping @MainActor () -> URL? = BackupOpenPanel.choose,
     chooseBackupDestination: @escaping @MainActor (String) -> URL? = BackupSavePanel.choose(
@@ -129,6 +138,10 @@ public final class PinaxAppModel: ObservableObject {
     self.defaults = defaults
     self.databaseOpener = databaseOpener
     self.usageSynchronizer = usageSynchronizer
+    self.commandApprovals = CommandApprovalStore(defaults: defaults)
+    self.commandRunner = commandRunner
+    self.scanClock = scanClock
+    self.wakeNotifications = wakeNotifications
     self.chooseSourceFolder = chooseSourceFolder
     let preferences = PreferencesStore(defaults: defaults)
     self.preferences = preferences
@@ -177,8 +190,10 @@ public final class PinaxAppModel: ObservableObject {
         thumbnails: thumbnails,
         quickLook: quickLook,
         externalsClaimer: CatalogExternalsClaimer(database: database),
-        externalsMigrator: CatalogExternalsMigrator(database: database),
-        domainMigrator: CatalogDomainMigrator(database: database),
+        externalsMigrator: CatalogExternalsMigrator(
+          database: database, commands: commandApprovals.policy, runner: commandRunner),
+        domainMigrator: CatalogDomainMigrator(
+          database: database, commands: commandApprovals.policy, runner: commandRunner),
         manifestExport: manifestExport,
         projectSettings: settings,
         gridOverlays: preferences.gridOverlays,
@@ -382,7 +397,10 @@ public final class PinaxAppModel: ObservableObject {
       }
       backup = backupModel
       let usageSyncModel = UsageSyncModel(
-        synchronizer: usageSynchronizer(database),
+        synchronizer: usageSynchronizer?(database)
+          ?? CatalogUsageSynchronizer(
+            database: database, approvals: commandApprovals, runner: commandRunner),
+        approvals: commandApprovals,
         chooseSource: UsageDocumentOpenPanel.choose)
       usageSync = usageSyncModel
       // One Scan Now. The Projects page and the reports'
@@ -442,9 +460,28 @@ public final class PinaxAppModel: ObservableObject {
       controller.setEnabled(preferences.isDropZoneEnabled)
       syncDropZoneBehaviour()
       await refreshRecentUploads()
+      startAutoScan(database: database, usageSync: usageSyncModel, settings: settings)
     } catch {
       openError = error.localizedDescription
     }
+  }
+
+  /// Watches and schedules from here on. Every read of the Projects page —
+  /// after an edit, a new project, a finished scan or a restore — rebuilds
+  /// the watches; the schedule's own checks catch what changes outside the app.
+  private func startAutoScan(
+    database: DatabasePool, usageSync: UsageSyncModel, settings: ProjectSettingsModel
+  ) {
+    let engine = AutoScanEngine(
+      database: database, usageSync: usageSync, clock: scanClock,
+      wakeNotifications: wakeNotifications)
+    autoScan = engine
+    // The snapshot is only the signal: the engine reads the catalog itself.
+    settings.$snapshot
+      .dropFirst()
+      .sink { [weak engine] _ in engine?.reload() }
+      .store(in: &projectCancellables)
+    engine.start()
   }
 
   /// Settings' two Move buttons hand over to the main
@@ -574,14 +611,15 @@ public final class PinaxAppModel: ObservableObject {
 
   /// The menu bar's Library ▸ Last scan ▸ Scan: the same one
   /// `scanNow` over the same targets, then the Library numbers again. true
-  /// when the scan stopped at the empty-scan confirmation, which the
-  /// gallery shows — the caller opens the gallery.
+  /// when the scan stopped at a confirmation (an empty scan, or a command
+  /// not yet allowed), which the gallery shows — the caller opens the gallery.
   public func scanFromMenuBar() async -> Bool {
     let targets = currentProjectScanTargets
     guard let usageSync, !targets.isEmpty else { return false }
     await usageSync.scanNow(projects: targets, presenter: .gallery)
     await refreshMenuBarStats()
     return usageSync.isEmptyScanConfirmationPresented(by: .gallery)
+      || usageSync.isCommandApprovalPresented(by: .gallery)
   }
 
   /// Project ▸ Choose Project… (⌃0): the title area's project picker.
