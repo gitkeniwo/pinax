@@ -240,9 +240,10 @@ struct AssetListCommand: ParsableCommand {
 
 // MARK: - pinax ls --format json
 
-/// One page of `ls`, in the table's order. `next` is null on the last page.
+/// One page of `ls`, in the table's order, in the asset document of
+/// docs/FORMATS.md with keys added. `next` is null on the last page.
 struct AssetListDocument: Encodable {
-  let schema = "pinax.list.v1"
+  let schema = 1
   let assets: [ListedAssetJSON]
   @ExplicitNull var next: String?
 
@@ -259,52 +260,38 @@ struct AssetListDocument: Encodable {
   }
 }
 
-/// The keys of an asset in `upload` JSON, and what the catalog knows
-/// besides.
+/// The keys of an asset in `upload` JSON, encoded as there, and what the
+/// catalog knows besides.
 struct ListedAssetJSON: Encodable {
-  @ExplicitNull var id: Int64?
-  let sha256: String
-  let backend: String
-  let key: String
-  let url: String
-  @ExplicitNull var width: Int?
-  @ExplicitNull var height: Int?
-  let bytes: Int64
-  let mime: String
-  let filename: String
-  let uploadedAt: String
-  let state: String
-  let favorite: Bool
-  let labels: [String]
-  let tags: [String]
-  let source: String
-  @ExplicitNull var note: String?
+  let published: PublicAsset
+  let catalog: CatalogFields
 
-  init(_ item: CatalogAssetItem, favorite: Bool, labels: [AssetLabel], tags: [String]) {
-    let asset = PublicAsset(asset: item.asset, backend: item.backend)
-    id = item.asset.id
-    sha256 = asset.sha256
-    backend = item.backend.slug
-    key = asset.key
-    url = asset.url
-    width = asset.width
-    height = asset.height
-    bytes = asset.bytes
-    mime = asset.mime
-    filename = asset.filename
-    uploadedAt = asset.uploadedAt
-    state = item.asset.state
-    self.favorite = favorite
-    self.labels = labels.map(\.rawValue)
-    self.tags = tags
-    source = AssetSource.of(meta: item.asset.meta).rawValue
-    note = item.asset.note
+  struct CatalogFields: Encodable {
+    let backend: String
+    let state: String
+    let favorite: Bool
+    let labels: [String]
+    let tags: [String]
+    let source: String
+    @ExplicitNull var note: String?
   }
 
-  enum CodingKeys: String, CodingKey {
-    case id, sha256, backend, key, url, width, height, bytes, mime, filename, state, favorite
-    case labels, tags, source, note
-    case uploadedAt = "uploaded_at"
+  init(_ item: CatalogAssetItem, favorite: Bool, labels: [AssetLabel], tags: [String]) {
+    published = PublicAsset(asset: item.asset, backend: item.backend)
+    catalog = CatalogFields(
+      backend: item.backend.slug,
+      state: item.asset.state,
+      favorite: favorite,
+      labels: labels.map(\.rawValue),
+      tags: tags,
+      source: AssetSource.of(meta: item.asset.meta).rawValue,
+      note: item.asset.note)
+  }
+
+  /// Both write their keys into the same object.
+  func encode(to encoder: Encoder) throws {
+    try published.encode(to: encoder)
+    try catalog.encode(to: encoder)
   }
 }
 

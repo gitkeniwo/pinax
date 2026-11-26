@@ -205,23 +205,23 @@ import Testing
     }
   }
 
-  @Test("JSON carries each asset's catalog fields, with null for what is missing")
+  @Test("JSON is the asset document with catalog fields added and no database ids")
   func json() throws {
     try withFixture { _, directory in
       let page = try document(["--source", "pinax", "--source", "bucket"], in: directory)
       let expected: [String: Any] = [
-        "schema": "pinax.list.v1",
+        "schema": 1,
         "next": NSNull(),
         "assets": [
           [
-            "id": 3, "sha256": String(format: "%064x", 3), "backend": "alt", "key": mango,
-            "url": "https://alt.example.com/notes/mango.gif", "width": NSNull(),
-            "height": NSNull(), "bytes": 30, "mime": "image/gif", "filename": "mango.gif",
+            // No width or height: as in upload JSON, the keys are left out.
+            "sha256": String(format: "%064x", 3), "backend": "alt", "key": mango,
+            "url": "https://alt.example.com/notes/mango.gif", "bytes": 30, "mime": "image/gif", "filename": "mango.gif",
             "uploaded_at": "2026-08-15T12:00:00Z", "state": "active", "favorite": false,
             "labels": [String](), "tags": [String](), "source": "bucket", "note": NSNull(),
           ] as [String: Any],
           [
-            "id": 1, "sha256": String(format: "%064x", 1), "backend": "r2", "key": zebra,
+            "sha256": String(format: "%064x", 1), "backend": "r2", "key": zebra,
             "url": "https://img.example.com/blog/2026/zebra.png", "width": 800,
             "height": 600, "bytes": 20, "mime": "image/png", "filename": "Zebra.png",
             "uploaded_at": "2026-07-10T00:00:00Z", "state": "active", "favorite": true,
@@ -231,6 +231,29 @@ import Testing
         ],
       ]
       #expect(page as NSDictionary == expected as NSDictionary)
+    }
+  }
+
+  @Test("Every key of the asset document is there with the same value")
+  func jsonCompatibility() throws {
+    try withFixture { database, directory in
+      var query = AssetQuery()
+      query.state = .active
+      let published = try PublicAssetJSON.encode(
+        CatalogAssets.page(query, in: database).items.map {
+          PublicAsset(asset: $0.asset, backend: $0.backend)
+        })
+      let before = try #require(
+        JSONSerialization.jsonObject(with: Data(published.utf8)) as? [String: Any])
+      var listed = try document([], in: directory)
+      #expect(listed.removeValue(forKey: "next") is NSNull)
+      let added = ["backend", "state", "favorite", "labels", "tags", "source", "note"]
+      let assets = try #require(listed["assets"] as? [[String: Any]])
+      for asset in assets {
+        #expect(added.allSatisfy { asset[$0] != nil })
+      }
+      listed["assets"] = assets.map { asset in asset.filter { !added.contains($0.key) } }
+      #expect(listed as NSDictionary == before as NSDictionary)
     }
   }
 }
