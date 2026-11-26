@@ -83,6 +83,41 @@ import Testing
     #expect(again.snapshot?.rows.first { $0.slug == "notes" }?.sources == [])
   }
 
+  @Test("Setting a source's fields as the editor shows them keeps the commas inside braces")
+  func shownFieldsRoundTrip() throws {
+    let (database, directory) = try makeUITestDatabase()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let custom = ["content/**/*.{md,mdx}", "{pages,layouts}/*.astro"]
+    let excluded = ["**/*.{test,spec}.tsx", "drafts/**"]
+    try CatalogConfiguration.setProjectSources(
+      slug: "blog",
+      [
+        ProjectSource(label: "plain", path: directory.path),
+        ProjectSource(label: "custom", path: directory.path, include: custom, exclude: excluded),
+      ], in: database)
+    let model = ProjectSettingsModel(
+      store: CatalogProjectSettingsStore(database: database), chooseFolder: { _ in nil })
+    model.load()
+
+    // Only the label changes; the other fields hold what the editor fills in.
+    for source in try #require(model.snapshot?.rows.first { $0.slug == "blog" }).sources {
+      model.updateSource(
+        label: source.label, inProject: "blog", newLabel: source.label + "-renamed",
+        include: source.effectiveInclude.joined(separator: ", "),
+        exclude: source.exclude.joined(separator: ", "))
+    }
+
+    #expect(model.saveError == nil)
+    #expect(
+      try CatalogConfiguration.projectSettings(slug: "blog", in: database).sources == [
+        ProjectSource(label: "plain-renamed", path: directory.path),
+        ProjectSource(
+          label: "custom-renamed", path: directory.path, include: custom, exclude: excluded),
+      ])
+    // As in the glob matcher, a `{` that is never closed is a literal.
+    #expect(ProjectSettingsModel.patterns("a{, b ,") == ["a{", "b"])
+  }
+
   // MARK: - Property 2: every Scan Now entry reaches the one method
 
   @Test("The Projects page and both reports' empty states and the Usage header each reach scanNow once, through the app's own closures")
