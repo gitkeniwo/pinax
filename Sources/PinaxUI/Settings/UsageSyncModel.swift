@@ -296,6 +296,7 @@ public final class UsageSyncModel: ObservableObject {
       if projects.count == 1 {
         await model.scan(projects[0], allowEmpty: false, presenter: presenter)
       } else {
+        model.emptyScanPresenter = presenter
         await model.scanAll(projects)
       }
     }.value
