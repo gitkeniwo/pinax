@@ -66,15 +66,6 @@ public struct DeletingCatalog: Sendable {
     self.remote = remote
   }
 
-  /// The app's remote: the backend's Keychain credentials, one
-  /// `S3ObjectDeleter` per backend.
-  public static func keychainRemote(_ backend: Backend) throws -> any ObjectDeleting {
-    guard let credentials = try Keychain().load(for: backend.keychainRef) else {
-      throw DeletingCatalogError.missingCredentials(backend.slug)
-    }
-    return S3ObjectDeleter(backend: backend, credentials: credentials)
-  }
-
   public func facts(for identifiers: [String]) async throws -> [DeletionFacts] {
     try await database.read { db in
       try identifiers.compactMap { identifier -> DeletionFacts? in
@@ -106,14 +97,11 @@ public struct DeletingCatalog: Sendable {
             SELECT DISTINCT u.source_ref FROM usage u JOIN project p ON p.id = u.project_id
             WHERE u.asset_id = ? AND u.last_scan_id IS NOT NULL AND u.last_scan_id = p.last_scan_id
             """, arguments: [assetID])
-        let meta = (row["meta"] as String?).flatMap {
-          try? JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any]
-        }
         return DeletionFacts(
           sha256: row["sha256"], key: row["key"], byteSize: row["byte_size"],
           isArchived: (row["state"] as String) == AssetState.archived.rawValue,
           backendSlug: row["slug"], bucket: row["bucket"], projects: projects,
-          importedFrom: meta?["imported_from"] as? String,
+          importedFrom: CatalogDeletion.importedFrom(meta: row["meta"]),
           usedInFiles: Array(Set(references.map(Self.file(of:)))).sorted(),
           liveUsageByProject: Dictionary(
             uniqueKeysWithValues: live.map { ($0["slug"] as String, $0["n"] as Int) }))
@@ -128,21 +116,11 @@ public struct DeletingCatalog: Sendable {
     return String(sourceReference[..<hash])
   }
 
-  /// Stages the deletable ones and removes the rest from the catalog only,
-  /// in that order; returns the tombstones owed a delete. The sheet already
-  /// warned about live usage, so both pass `includeUsed`.
+  /// The sheet already warned about live usage, so this passes
+  /// `includeUsed`. Returns the tombstones owed a delete.
   public func stage(deleting: [String], keeping: [String]) throws -> [Int64] {
-    var staged: [DeletionCandidate] = []
-    if !deleting.isEmpty {
-      staged = try CatalogDeletion.stage(deleting, in: database, includeUsed: true)
-    }
-    if !keeping.isEmpty {
-      try CatalogDeletion.removeFromCatalogOnly(keeping, in: database, includeUsed: true)
-    }
-    let wanted = Set(staged.map { "\($0.backendSlug)\u{0}\($0.key)" })
-    return try CatalogDeletion.pending(in: database)
-      .filter { !$0.keepRemote && wanted.contains("\($0.backendSlug)\u{0}\($0.key)") }
-      .map(\.id)
+    try CatalogDeletion.stage(
+      deleting: deleting, keeping: keeping, in: database, includeUsed: true)
   }
 
   public func purge(_ id: Int64) async throws -> PurgeResult? {
@@ -168,17 +146,6 @@ public struct DeletingCatalog: Sendable {
       UnfinishedDeletion(
         id: $0.id, key: $0.key, sha256: $0.sha256, bucket: buckets[$0.backendID] ?? $0.backendSlug,
         phase: $0.phase, lastError: $0.lastError)
-    }
-  }
-}
-
-public enum DeletingCatalogError: Error, Equatable, CustomStringConvertible {
-  case missingCredentials(String)
-
-  public var description: String {
-    switch self {
-    case let .missingCredentials(slug):
-      return "No credentials for backend '\(slug)' in Keychain."
     }
   }
 }

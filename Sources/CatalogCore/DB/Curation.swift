@@ -174,7 +174,21 @@ extension CatalogAssets {
   /// The assets the identifiers name, in order, each once. Every identifier
   /// is tried, so the error lists all that did not resolve.
   static func resolveAll(_ identifiers: [String], db: GRDB.Database) throws -> [Asset] {
-    var assets: [Asset] = []
+    try resolveNamed(identifiers, db: db).map(\.asset)
+  }
+
+  /// `resolveAll`, keeping with each asset the first identifier that named
+  /// it: a key or prefix that still names that one asset alone.
+  public static func resolveNamed(_ identifiers: [String], in database: DatabasePool) throws
+    -> [(identifier: String, asset: Asset)]
+  {
+    try database.read { try resolveNamed(identifiers, db: $0) }
+  }
+
+  private static func resolveNamed(_ identifiers: [String], db: GRDB.Database) throws
+    -> [(identifier: String, asset: Asset)]
+  {
+    var named: [(identifier: String, asset: Asset)] = []
     var seenIDs = Set<Int64>()
     var tried = Set<String>()
     var unresolved: [AssetCatalogError] = []
@@ -183,7 +197,7 @@ extension CatalogAssets {
         guard let asset = try resolveInWrite(identifier, db: db), let id = asset.id else {
           throw AssetCatalogError.assetNotFound(identifier)
         }
-        if seenIDs.insert(id).inserted { assets.append(asset) }
+        if seenIDs.insert(id).inserted { named.append((identifier, asset)) }
       } catch let error as AssetCatalogError {
         unresolved.append(error)
       }
@@ -191,7 +205,7 @@ extension CatalogAssets {
     guard unresolved.isEmpty else {
       throw AssetCatalogError.unresolvedIdentifiers(unresolved)
     }
-    return assets
+    return named
   }
 
   static func curate(

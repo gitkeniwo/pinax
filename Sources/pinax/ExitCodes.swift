@@ -64,6 +64,20 @@ enum CLIExit {
     case let error as CatalogRestoreError:
       if case .catalogNotEmpty = error { return refused }
       return nil
+    case let error as CatalogDeletionError:
+      switch error {
+      case .noSuchPendingDeletion, .objectGone: return notFound
+      case .tooMany, .notArchived, .unsafeKey, .sharedKey, .stillUsed, .restoreNeedsRemoteCheck,
+        .objectNotOurs, .restoreConflict:
+        return refused
+      }
+    case let error as ObjectDeleteError:
+      switch error {
+      case .unsafeKey: return refused
+      case .permissionDenied, .http: return remote
+      }
+    case is DeletionRemoteError:
+      return credentials
     case is DatabaseLocationError:
       return refused
     case is RunCommandsRequired:

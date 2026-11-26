@@ -22,6 +22,7 @@ struct Pinax: AsyncParsableCommand {
       NoteCommand.self,
       ArchiveCommand.self,
       UnarchiveCommand.self,
+      DeleteCommand.self,
       FavoriteCommand.self,
       ExportCommand.self,
       TagCommand.self,

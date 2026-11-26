@@ -465,3 +465,95 @@ struct MissingSourcesJSON: Encodable {
   let name: String
   let paths: [String]
 }
+
+// MARK: - pinax delete
+
+/// The plan of the named assets and, once confirmed or resumed, what became
+/// of each. `--resume` has no plan.
+struct DeleteDocument: Encodable {
+  let schema = "pinax.delete.v1"
+  let plan: [DeletePlanJSON]
+  let results: [DeleteResultJSON]
+}
+
+struct DeletePlanJSON: Encodable {
+  let sha256: String
+  let key: String
+  let backend: String
+  let bytes: Int64
+  /// False for an imported asset: its object stays in the bucket.
+  let deletesRemote: Bool
+  let liveUsage: Int
+
+  init(_ candidate: DeletionCandidate, deletesRemote: Bool) {
+    sha256 = candidate.sha256
+    key = candidate.key
+    backend = candidate.backendSlug
+    bytes = candidate.byteSize
+    self.deletesRemote = deletesRemote
+    liveUsage = candidate.liveUsage
+  }
+
+  enum CodingKeys: String, CodingKey {
+    case sha256, key, backend, bytes
+    case deletesRemote = "deletes_remote"
+    case liveUsage = "live_usage"
+  }
+}
+
+struct DeleteResultJSON: Encodable {
+  let key: String
+  /// `deleted`, `already_gone`, `superseded`, `refused_mismatch`, `failed`,
+  /// or `removed_from_catalog`.
+  let outcome: String
+  @ExplicitNull var error: String?
+
+  init(key: String, outcome: String, error: String?) {
+    self.key = key
+    self.outcome = outcome
+    self.error = error
+  }
+
+  enum CodingKeys: String, CodingKey {
+    case key, outcome, error
+  }
+}
+
+// MARK: - pinax delete --pending
+
+struct PendingDeletionsDocument: Encodable {
+  let schema = "pinax.pending-deletions.v1"
+  let pending: [PendingDeletionJSON]
+}
+
+struct PendingDeletionJSON: Encodable {
+  let backend: String
+  let key: String
+  let sha256: String
+  let bytes: Int64
+  /// `staged`, `refused` or `delete_sent`.
+  let phase: String
+  let attempts: Int
+  @ExplicitNull var lastError: String?
+  let requestedAt: String
+  let updatedAt: String
+
+  init(_ deletion: PendingDeletion) {
+    backend = deletion.backendSlug
+    key = deletion.key
+    sha256 = deletion.sha256
+    bytes = deletion.byteSize
+    phase = deletion.phase.rawValue
+    attempts = deletion.attempts
+    lastError = deletion.lastError
+    requestedAt = deletion.requestedAt
+    updatedAt = deletion.updatedAt
+  }
+
+  enum CodingKeys: String, CodingKey {
+    case backend, key, sha256, bytes, phase, attempts
+    case lastError = "last_error"
+    case requestedAt = "requested_at"
+    case updatedAt = "updated_at"
+  }
+}
