@@ -306,9 +306,24 @@ public final class ProjectSettingsModel: ObservableObject {
       + " · \(count) \(count == 1 ? "reference" : "references")"
   }
 
-  /// "a, b ,c" → ["a", "b", "c"].
+  /// "a, b ,c" → ["a", "b", "c"]. A comma inside `{…}` belongs to its
+  /// pattern. As in `PathGlob`, braces do not nest and a `{` without a
+  /// closing `}` is a literal.
   public nonisolated static func patterns(_ text: String) -> [String] {
-    text.split(separator: ",")
+    var pieces: [Substring] = []
+    var start = text.startIndex
+    var index = start
+    while index < text.endIndex {
+      if text[index] == "{", let close = text[index...].firstIndex(of: "}") {
+        index = close
+      } else if text[index] == "," {
+        pieces.append(text[start..<index])
+        start = text.index(after: index)
+      }
+      index = text.index(after: index)
+    }
+    pieces.append(text[start...])
+    return pieces
       .map { $0.trimmingCharacters(in: .whitespaces) }
       .filter { !$0.isEmpty }
   }
