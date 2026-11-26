@@ -24,6 +24,8 @@ struct Pinax: AsyncParsableCommand {
       UsageCommand.self,
       OrphansCommand.self,
       ExternalsCommand.self,
+      UsedInCommand.self,
+      StatsCommand.self,
       RewriteMapCommand.self,
       RewriteCommand.self,
       RunsCommand.self,

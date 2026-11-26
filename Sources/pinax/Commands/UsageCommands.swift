@@ -95,7 +95,7 @@ struct RunCommandsRequired: Error, Equatable, CustomStringConvertible {
   }
 }
 
-struct UsageReportCommand: ParsableCommand {
+struct UsageReportCommand: AsyncParsableCommand {
   static let configuration = CommandConfiguration(
     commandName: "report",
     abstract: "Report live usages from a project's latest completed scan."
@@ -107,23 +107,75 @@ struct UsageReportCommand: ParsableCommand {
   @Option(name: .long)
   var format: UsageOutputFormat = .table
 
-  mutating func run() throws {
-    let report = try CatalogUsage.report(project: project, in: openCatalogDatabase())
+  @Flag(
+    name: .long,
+    help: "List only references still on an old domain; the table adds each one's current URL.")
+  var oldDomains = false
+
+  @Option(
+    name: .long,
+    help: "List only one file's references. Give its source reference, with or without #L<line>.")
+  var source: String?
+
+  mutating func run() async throws {
+    let output = try await output(in: openCatalogDatabase())
+    FileHandle.standardError.write(Data(output.notes.utf8))
+    print(output.text, terminator: "")
+  }
+
+  /// What `run` writes: `notes` to standard error, then `text` (the table or
+  /// the JSON document) to standard output.
+  func output(in database: CatalogDatabasePool) async throws -> (notes: String, text: String) {
+    let report = try await CatalogUsage.report(project: project, in: database)
+    var notes = ""
     if !report.hasCompletedScan {
-      let hint = "Project '\(project)' has no completed usage scan.\n"
-      FileHandle.standardError.write(Data(hint.utf8))
+      notes = "Project '\(project)' has no completed usage scan.\n"
+    }
+    var items = report.items
+    if let source {
+      items = items.filter { Self.reference($0.sourceReference, isIn: source) }
+    }
+    // The plain table needs nothing about domains.
+    var current: [ReportReferenceID: String] = [:]
+    var old: Set<ReportReferenceID> = []
+    if oldDomains || format == .json {
+      let usage = try await CatalogUsage.liveUsage(project: project, in: database)
+      for reference in usage.references {
+        let id = ReportReferenceID(reference)
+        current[id] = usage.assets[reference.assetID]?.url
+        if reference.isOldDomain { old.insert(id) }
+      }
+    }
+    if oldDomains {
+      items = items.filter { old.contains(ReportReferenceID($0)) }
     }
     switch format {
     case .json:
-      print(try encodedJSON(report))
+      let document = UsageReportDocument(
+        schema: report.schema, project: report.project,
+        items: items.map {
+          let id = ReportReferenceID($0)
+          return UsageReportItemJSON(item: $0, oldDomain: old.contains(id), currentURL: current[id])
+        })
+      return (notes, try encodedJSON(document) + "\n")
     case .table:
-      print("SHA256\tKEY\tKIND\tSOURCE\tURL")
-      for item in report.items {
-        print(
+      var table = "SHA256\tKEY\tKIND\tSOURCE\tURL" + (oldDomains ? "\tNEW_URL" : "") + "\n"
+      for item in items {
+        table +=
           "\(item.sha256.map { String($0.prefix(12)) } ?? "external")\t\(item.key ?? "")\t\(item.kind)\t\(item.sourceReference)\t\(item.rawURL)"
-        )
+        if oldDomains { table += "\t\(current[ReportReferenceID(item)] ?? "")" }
+        table += "\n"
       }
+      return (notes, table)
     }
+  }
+
+  /// Whether `reference` is `file` itself or one of its lines, `file#L<n>`.
+  static func reference(_ reference: String, isIn file: String) -> Bool {
+    if reference == file { return true }
+    guard reference.hasPrefix(file + "#L") else { return false }
+    let line = reference.dropFirst(file.count + 2)
+    return !line.isEmpty && line.allSatisfy { ("0"..."9").contains($0) }
   }
 }
 
@@ -215,19 +267,33 @@ struct ExternalsListCommand: AsyncParsableCommand {
   @Option(name: .long)
   var format: OutputFormat = .table
 
+  @Option(
+    name: .long,
+    help: "List only URLs on your domains (yours: a backend's current or old prefix) or the rest (other).")
+  var domain: ExternalDomain?
+
   mutating func run() async throws {
-    let database = try openCatalogDatabase()
+    print(try await output(in: openCatalogDatabase()), terminator: "")
+  }
+
+  func output(in database: CatalogDatabasePool) async throws -> String {
+    if format == .table && domain == nil {
+      let items = try CatalogUsage.externals(project: project, in: database)
+      return Self.table(items.map { ($0.kind, $0.sourceReference, $0.rawURL) })
+    }
+    var references = try await CatalogUsage.externalReferences(project: project, in: database)
+      .references
+    if let domain { references = references.filter { $0.domain == domain } }
     if format == .json {
-      let set = try await CatalogUsage.externalReferences(project: project, in: database)
-      print(
-        try encodedJSON(
-          ExternalListDocument(project: project, items: set.references.map(ExternalJSON.init))))
-      return
+      return try encodedJSON(
+        ExternalListDocument(project: project, items: references.map(ExternalJSON.init))) + "\n"
     }
-    let items = try CatalogUsage.externals(project: project, in: database)
-    print("KIND\tSOURCE\tURL")
-    for item in items {
-      print("\(item.kind)\t\(item.sourceReference)\t\(item.rawURL)")
-    }
+    return Self.table(references.map { ($0.kind, $0.sourceReference, $0.rawURL) })
+  }
+
+  private static func table(_ rows: [(kind: String, source: String, url: String)]) -> String {
+    rows.reduce("KIND\tSOURCE\tURL\n") { $0 + "\($1.kind)\t\($1.source)\t\($1.url)\n" }
   }
 }
+
+extension ExternalDomain: ExpressibleByArgument {}
