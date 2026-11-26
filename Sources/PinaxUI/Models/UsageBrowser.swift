@@ -265,16 +265,16 @@ public enum UsageRowInfo: Equatable, Sendable {
 
 /// The Open File / Reveal rule: a reference names a file Pinax can
 /// open only when its source reference starts `<label>/`, the label is one
-/// of the project's configured sources, and the file is there. An external
-/// scanner's references never pass.
+/// of the project's configured folder sources, and the file is there. An
+/// external scanner's references, and a command source's, never pass.
 public enum UsageSourceFile {
   public static func url(
     project: String, path: String, sources: [String: [ProjectSource]],
     fileExists: (String) -> Bool = { FileManager.default.fileExists(atPath: $0) }
   ) -> URL? {
-    guard let (source, rest) = split(project: project, path: path, sources: sources) else {
-      return nil
-    }
+    guard let (source, rest) = split(project: project, path: path, sources: sources),
+      source.kind == .folder
+    else { return nil }
     let url = URL(fileURLWithPath: source.path, isDirectory: true).appendingPathComponent(rest)
     return fileExists(url.path) ? url : nil
   }

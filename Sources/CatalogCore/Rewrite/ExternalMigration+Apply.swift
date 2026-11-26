@@ -28,7 +28,9 @@ extension ExternalMigration {
     compression: CompressionChoice = .project,
     cancellation: ExternalMigrationCancellation = ExternalMigrationCancellation(),
     progress: (@Sendable (ExternalMigrationProgress) -> Void)? = nil,
-    processExists: (Int32) -> Bool = RunLog.processExists
+    processExists: (Int32) -> Bool = RunLog.processExists,
+    commands: CommandSourcePolicy = .deny,
+    runner: CommandSourceRunning = ShellCommandRunner()
   ) async throws -> ExternalMigrationResult {
     try gate.enter()
     defer { gate.leave() }
@@ -286,7 +288,8 @@ extension ExternalMigration {
       let written = try RewriteRuns.write(
         plans, allowedSources: allowedSources, backupRoot: backupRoot, runID: runID, git: git, log: &log)
       // Step 5.
-      try RewriteRuns.rescan(written.rescanned, database: database, log: &log)
+      try RewriteRuns.rescan(
+        written.rescanned, database: database, commands: commands, runner: runner, log: &log)
 
       // Step 6.
       summary = RewriteRuns.planSummary(plans)

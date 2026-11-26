@@ -92,7 +92,9 @@ import Testing
       #expect(model.rows.count == 250)
       #expect(Set(model.rows.map(\.id)).count == 250)
 
-      let unpaginated = try CatalogAssets.list(in: database, limit: 250).map(\.asset.key)
+      var all = AssetQuery()
+      all.limit = 250
+      let unpaginated = try await CatalogAssets.page(all, in: database).items.map(\.asset.key)
       #expect(model.rows.map(\.item.asset.key) == unpaginated)
     }
   }

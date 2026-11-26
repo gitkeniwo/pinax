@@ -32,7 +32,7 @@ struct TagCommand: ParsableCommand {
   static let configuration = CommandConfiguration(
     commandName: "tag",
     abstract: "Manage asset tags.",
-    subcommands: [TagAddCommand.self, TagRemoveCommand.self]
+    subcommands: [TagAddCommand.self, TagRemoveCommand.self, TagListCommand.self]
   )
 }
 
@@ -61,5 +61,43 @@ struct TagRemoveCommand: ParsableCommand {
 
   mutating func run() throws {
     try CatalogAssets.removeTag(tag, from: identifier, in: openCatalogDatabase())
+  }
+}
+
+struct TagListCommand: ParsableCommand {
+  static let configuration = CommandConfiguration(
+    commandName: "ls",
+    abstract: "List the tags on active assets, with counts."
+  )
+
+  @Option(name: .long)
+  var format: OutputFormat = .table
+
+  mutating func run() throws {
+    let tags = try CatalogAssets.tagSummaries(in: openCatalogDatabase())
+    let counts = tags.map { NameCountJSON(name: $0.name, count: $0.assetCount) }
+    if format == .json {
+      print(try encodedJSON(TagListDocument(tags: counts)))
+      return
+    }
+    printNameCounts(counts)
+  }
+}
+
+/// One row of `tag ls` and `label ls`.
+struct NameCountJSON: Encodable {
+  let name: String
+  let count: Int
+}
+
+struct TagListDocument: Encodable {
+  let schema = "pinax.tags.v1"
+  let tags: [NameCountJSON]
+}
+
+func printNameCounts(_ rows: [NameCountJSON]) {
+  print("NAME\tCOUNT")
+  for row in rows {
+    print("\(row.name)\t\(row.count)")
   }
 }

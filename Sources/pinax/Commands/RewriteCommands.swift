@@ -84,6 +84,9 @@ struct RewriteCommand: AsyncParsableCommand {
   @Option(help: "PROJECT/LABEL of a source to write although it isn't clean in git. Repeatable.")
   var allowSource: [String] = []
 
+  @Flag(help: "With --apply, let the rescan afterwards run the project's command sources.")
+  var runCommands = false
+
   @Option
   var format: RewriteOutputFormat = .table
 
@@ -99,6 +102,7 @@ struct RewriteCommand: AsyncParsableCommand {
     } else {
       guard fromRun == nil else { throw ValidationError("--from-run only goes with --apply.") }
       guard allowSource.isEmpty else { throw ValidationError("--allow-source only goes with --apply.") }
+      guard !runCommands else { throw ValidationError("--run-commands only goes with --apply.") }
       guard project != nil else { throw ValidationError("Give --project SLUG.") }
       guard (fromPrefix == nil) == (toPrefix == nil) else {
         throw ValidationError("Give --from-prefix and --to-prefix together.")
@@ -134,7 +138,7 @@ struct RewriteCommand: AsyncParsableCommand {
     if apply, let fromRun {
       let result = try RewriteRuns.apply(
         fromRun: fromRun, allowedSources: Set(allowSource), database: database, git: git,
-        backupRoot: backupRoot)
+        backupRoot: backupRoot, commands: runCommands ? .allow : .deny)
       return try Self.applyOutput(
         result, events: try RunLog.events(of: result.runID, in: database), format: format)
     }

@@ -175,7 +175,10 @@ struct ProjectCommand: ParsableCommand {
   static let configuration = CommandConfiguration(
     commandName: "project",
     abstract: "Manage upload projects.",
-    subcommands: [ProjectAdd.self, ProjectList.self, ProjectSet.self, ProjectSourceCommand.self]
+    subcommands: [
+      ProjectAdd.self, ProjectList.self, ProjectSet.self, ProjectSourceCommand.self,
+      ProjectLinkCommand.self, ProjectUnlinkCommand.self, ProjectMoveCommand.self,
+    ]
   )
 }
 
@@ -271,6 +274,10 @@ struct ProjectSet: ParsableCommand {
   var quality: QualityArgument?
   @Flag(help: "Whether a compressed copy drops the original's metadata, location included.")
   var metadata: MetadataArgument?
+  @Option(help: "Rescan when the project's source folders change: on or off.")
+  var watch: WatchArgument?
+  @Option(help: "Rescan on a schedule while the app is open: off, hourly or daily.")
+  var schedule: ScheduleArgument?
 
   func validate() throws {
     if keyTemplate != nil, resetKeyTemplate {
@@ -280,6 +287,10 @@ struct ProjectSet: ParsableCommand {
 
   private var changesCompression: Bool {
     compress != nil || longestEdge != nil || quality != nil || metadata != nil
+  }
+
+  private var changesAutoScan: Bool {
+    watch != nil || schedule != nil
   }
 
   private var changesProject: Bool {
@@ -293,11 +304,11 @@ struct ProjectSet: ParsableCommand {
   }
 
   func perform(in database: CatalogDatabasePool) throws -> (output: String, warnings: [String]) {
-    // Compression alone is a change too; with nothing at all given,
-    // setProject reports that nothing changed. The project's own fields go
-    // first, so a refused change leaves compression as it was.
+    // Compression or automatic scanning alone is a change too; with nothing
+    // at all given, setProject reports that nothing changed. The project's
+    // own fields go first, so a refused change leaves the others as they were.
     var warnings: [String] = []
-    if changesProject || !changesCompression {
+    if changesProject || !(changesCompression || changesAutoScan) {
       let change: KeyTemplateChange =
         resetKeyTemplate ? .reset : keyTemplate.map { .set($0) } ?? .unchanged
       let project = try CatalogConfiguration.setProject(
@@ -317,6 +328,12 @@ struct ProjectSet: ParsableCommand {
         if let quality { compression.options.quality = quality.value }
         if let metadata { compression.options.removesMetadata = metadata == .removeMetadata }
       }
+    }
+    if changesAutoScan {
+      var autoScan = try CatalogConfiguration.projectSettings(slug: slug, in: database).autoScan
+      if let watch { autoScan.watch = watch == .on }
+      if let schedule { autoScan.schedule = schedule.value }
+      try CatalogConfiguration.setAutoScan(slug: slug, autoScan, in: database)
     }
     return (slug, warnings)
   }
@@ -348,6 +365,18 @@ enum QualityArgument: String, ExpressibleByArgument, CaseIterable {
 enum MetadataArgument: String, EnumerableFlag {
   case removeMetadata
   case keepMetadata
+}
+
+/// `--watch on|off`.
+enum WatchArgument: String, ExpressibleByArgument, CaseIterable {
+  case on, off
+}
+
+/// `--schedule off|hourly|daily`.
+enum ScheduleArgument: String, ExpressibleByArgument, CaseIterable {
+  case off, hourly, daily
+
+  var value: ProjectAutoScan.Schedule { ProjectAutoScan.Schedule(rawValue: rawValue)! }
 }
 
 /// The key template warnings for the project's template and key prefix as saved.

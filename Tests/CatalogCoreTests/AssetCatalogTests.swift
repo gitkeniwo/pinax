@@ -6,14 +6,13 @@ import Testing
 @Test("Asset list filters by project, tag, state, and date")
 func assetListFilters() throws {
   try withAssetCatalog { database in
-    let items = try CatalogAssets.list(
-      in: database,
-      project: "blog",
-      tag: "hero",
-      state: "active",
-      since: "2026-08-01T00:00:00Z",
-      limit: 10
-    )
+    var query = AssetQuery()
+    query.project = "blog"
+    query.tag = "hero"
+    query.state = .active
+    query.since = "2026-08-01T00:00:00Z"
+    query.limit = 10
+    let items = try CatalogAssets.page(query, in: database).items
     #expect(items.count == 1)
     #expect(items[0].asset.key == "blog/hero image.png")
     #expect(items[0].url == "https://img.example.com/blog/hero%20image.png")
@@ -32,7 +31,10 @@ func assetListFilters() throws {
     #expect(assets[0]["backend_id"] == nil)
     #expect(assets[0]["keychain_ref"] == nil)
 
-    let archived = try CatalogAssets.list(in: database, state: "archived", limit: 1)
+    var archivedQuery = AssetQuery()
+    archivedQuery.state = .archived
+    archivedQuery.limit = 1
+    let archived = try CatalogAssets.page(archivedQuery, in: database).items
     #expect(archived.map(\.asset.key) == ["archive/old.png"])
   }
 }
@@ -65,9 +67,27 @@ func assetDetailsIncludeUsage() throws {
   try withAssetCatalog { database in
     let details = try CatalogAssets.details("abcdef1", in: database)
     #expect(details.tags == ["hero"])
+    #expect(!details.favorite)
+    #expect(details.labels == [])
     #expect(details.projects.count == 1)
     #expect(details.projects[0].slug == "blog")
     #expect(details.projects[0].liveUsageCount == 1)
+  }
+}
+
+@Test("Asset details include the favorite flag and labels, labels in Finder's order")
+func assetDetailsIncludeCuration() throws {
+  try withAssetCatalog { database in
+    try database.write { db in
+      try db.execute(
+        sql: """
+          UPDATE asset SET favorite = 1 WHERE id = 1;
+          INSERT INTO asset_label (asset_id, label) VALUES (1, 'blue'), (1, 'red');
+          """)
+    }
+    let details = try CatalogAssets.details("abcdef1", in: database)
+    #expect(details.favorite)
+    #expect(details.labels == [.red, .blue])
   }
 }
 

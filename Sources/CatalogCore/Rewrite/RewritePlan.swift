@@ -184,7 +184,9 @@ public enum RewritePlanner {
     var targetURLs = Set<String>()
     var targetSHA256: [String: String] = [:]
     var targetOldURLs: [String: Set<String>] = [:]
-    for source in sources {
+    // A command source's content is not on this Mac: there is nothing to
+    // rewrite.
+    for source in sources where source.kind == .folder {
       let root = URL(fileURLWithPath: source.path, isDirectory: true)
       var isDirectory: ObjCBool = false
       guard FileManager.default.fileExists(atPath: root.path, isDirectory: &isDirectory),

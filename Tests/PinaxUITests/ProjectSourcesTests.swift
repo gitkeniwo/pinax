@@ -218,9 +218,9 @@ import Testing
     let ls = try parse(["project", "source", "ls", "blog"], as: ProjectSourceList.self)
     #expect(
       try ls.output(in: database)
-        == "astro-blog\t/Users/someone/astro-blog\tsrc/**/*.md src/**/*.astro\tsrc/drafts/**\n"
-        + "astro-blog-2\t\(home)/astro-blog\t**/*.{md,mdx,markdown,html,htm,astro,vue,svelte,jsx,tsx,css,scss,yml,yaml}\t-\n"
-        + "notes\t/Users/someone/notes\t**/*.{md,mdx,markdown,html,htm,astro,vue,svelte,jsx,tsx,css,scss,yml,yaml}\t-\n")
+        == "astro-blog\t/Users/someone/astro-blog\tsrc/**/*.md src/**/*.astro\tsrc/drafts/**\tfolder\n"
+        + "astro-blog-2\t\(home)/astro-blog\t**/*.{md,mdx,markdown,html,htm,astro,vue,svelte,jsx,tsx,css,scss,yml,yaml}\t-\tfolder\n"
+        + "notes\t/Users/someone/notes\t**/*.{md,mdx,markdown,html,htm,astro,vue,svelte,jsx,tsx,css,scss,yml,yaml}\t-\tfolder\n")
 
     let rm = try parse(["project", "source", "rm", "blog", "astro-blog-2"], as: ProjectSourceRemove.self)
     #expect(try rm.output(in: database) == "astro-blog-2")

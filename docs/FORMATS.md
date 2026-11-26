@@ -30,7 +30,50 @@ The JSON documents other tools exchange with Pinax. Each carries `"schema": 1`. 
 
 The manifest contains active assets only. The top-level `backend` is the project's current backend; each asset's `url` uses the backend that owns that asset. `sha256` is the stable public identifier.
 
-`pinax upload --format json` and `pinax ls --format json` use the same asset fields, always inside `{"schema": 1, "assets": [...]}`, even for one asset. Upload output can add `deduplicated` and `dry_run` to each asset. None of these documents contain database ids, backend records or Keychain references.
+`pinax upload --format json` and `pinax ls --format json` use the same asset fields, always inside `{"schema": 1, "assets": [...]}`, even for one asset. Upload output can add `deduplicated`, `dry_run` and, for an image stored as a compressed copy, `compression` to each asset. None of these documents contain database ids, backend records or Keychain references. `width` and `height` are left out when unknown.
+
+## Asset list
+
+`pinax ls --format json` adds these fields to each asset; upload output and the manifest do not have them:
+
+| Field | Value |
+| --- | --- |
+| `backend` | The slug of the backend that holds the asset. |
+| `state` | `active` or `archived`. |
+| `favorite` | `true` or `false`. |
+| `labels` | Colour labels, from `red`, `orange`, `yellow`, `green`, `blue`, `purple`, `gray`, in that order. |
+| `tags` | Tag names. |
+| `source` | `pinax`, `picgo`, `bucket`, `other_import` or `migrated`. |
+| `note` | The note, or `null`. |
+
+It also adds a top-level `next`. When more assets match than `--limit` allows, it is a string to pass back as `--after`, with the same filters, `--sort` and direction, to get the following page; otherwise it is `null`. Treat it as opaque.
+
+```json
+{
+  "schema": 1,
+  "assets": [
+    {
+      "sha256": "f58e6db5…",
+      "key": "blog/202511/dashboard-a1b2c3d4e5f6.png",
+      "url": "https://img.example.com/blog/202511/dashboard-a1b2c3d4e5f6.png",
+      "width": 990,
+      "height": 720,
+      "bytes": 148213,
+      "mime": "image/png",
+      "filename": "20251112233829358.png",
+      "uploaded_at": "2025-11-12T23:38:29Z",
+      "backend": "r2",
+      "state": "active",
+      "favorite": false,
+      "labels": ["red"],
+      "tags": ["dashboard"],
+      "source": "pinax",
+      "note": null
+    }
+  ],
+  "next": null
+}
+```
 
 ## Usage scan
 

@@ -8,6 +8,10 @@ public enum AssetCatalogError: Error, Equatable, CustomStringConvertible {
   case invalidTag(String)
   case projectNotFound(String)
   case unlinkBlockedByLiveUsage(project: String, liveCount: Int)
+  /// A batch's identifiers that named no single asset, one error each.
+  case unresolvedIdentifiers([AssetCatalogError])
+  /// The assets a batch would unlink from a project that still references them.
+  case unlinkBlockedForAssets(project: String, assets: [LiveUsedAsset])
 
   public var description: String {
     switch self {
@@ -25,7 +29,45 @@ public enum AssetCatalogError: Error, Equatable, CustomStringConvertible {
       return
         "Project '\(project)' still references this asset (\(liveCount) live references). "
         + "Unlinking it requires explicit confirmation."
+    case let .unresolvedIdentifiers(errors):
+      return errors.map(\.description).joined(separator: "\n")
+    case let .unlinkBlockedForAssets(project, assets):
+      let lines = assets.map {
+        "  \($0.sha256.prefix(12))  \($0.key)  \($0.liveCount) live references"
+      }
+      return
+        "Project '\(project)' still references these assets. "
+        + "Unlinking them requires explicit confirmation.\n" + lines.joined(separator: "\n")
     }
+  }
+}
+
+extension AssetCatalogError {
+  /// A one-asset batch's error as the error about that asset.
+  fileprivate var forOneAsset: AssetCatalogError {
+    switch self {
+    case let .unresolvedIdentifiers(errors):
+      return errors.first ?? self
+    case let .unlinkBlockedForAssets(project, assets):
+      return assets.first.map {
+        .unlinkBlockedByLiveUsage(project: project, liveCount: $0.liveCount)
+      } ?? self
+    default:
+      return self
+    }
+  }
+}
+
+/// An asset a project's latest scan still references.
+public struct LiveUsedAsset: Equatable, Sendable {
+  public let sha256: String
+  public let key: String
+  public let liveCount: Int
+
+  public init(sha256: String, key: String, liveCount: Int) {
+    self.sha256 = sha256
+    self.key = key
+    self.liveCount = liveCount
   }
 }
 
@@ -57,70 +99,23 @@ public struct CatalogAssetDetails: Codable, Sendable {
   public let item: CatalogAssetItem
   public let tags: [String]
   public let projects: [ProjectUsageCount]
+  public let favorite: Bool
+  /// In Finder's order.
+  public let labels: [AssetLabel]
 
-  public init(item: CatalogAssetItem, tags: [String], projects: [ProjectUsageCount]) {
+  public init(
+    item: CatalogAssetItem, tags: [String], projects: [ProjectUsageCount],
+    favorite: Bool = false, labels: [AssetLabel] = []
+  ) {
     self.item = item
     self.tags = tags
     self.projects = projects
+    self.favorite = favorite
+    self.labels = labels
   }
 }
 
 public enum CatalogAssets {
-  public static func list(
-    in database: DatabasePool,
-    project: String? = nil,
-    tag: String? = nil,
-    state: String? = nil,
-    since: String? = nil,
-    limit: Int = 50
-  ) throws -> [CatalogAssetItem] {
-    try database.read { db in
-      var joins = ""
-      var conditions: [String] = []
-      var arguments: [DatabaseValueConvertible?] = []
-      if let project {
-        joins +=
-          " JOIN asset_project ap ON ap.asset_id = a.id JOIN project p ON p.id = ap.project_id"
-        conditions.append("p.slug = ?")
-        arguments.append(project)
-      }
-      if let tag {
-        joins += " JOIN asset_tag at ON at.asset_id = a.id JOIN tag t ON t.id = at.tag_id"
-        conditions.append("t.name = ?")
-        arguments.append(tag)
-      }
-      if let state {
-        conditions.append("a.state = ?")
-        arguments.append(state)
-      }
-      if let since {
-        conditions.append("a.uploaded_at >= ?")
-        arguments.append(since)
-      }
-      let whereClause = conditions.isEmpty ? "" : " WHERE " + conditions.joined(separator: " AND ")
-      arguments.append(limit)
-      let assets = try Asset.fetchAll(
-        db,
-        sql: """
-          SELECT DISTINCT a.*
-          FROM asset a\(joins)\(whereClause)
-          ORDER BY a.uploaded_at DESC, a.id DESC
-          LIMIT ?
-          """,
-        arguments: StatementArguments(arguments)
-      )
-      let backendIDs = Set(assets.map(\.backendID))
-      let backends = try Backend.filter(backendIDs.contains(Column("id"))).fetchAll(db)
-      let backendByID = Dictionary(
-        uniqueKeysWithValues: backends.compactMap { backend in
-          backend.id.map { ($0, backend) }
-        })
-      return assets.compactMap { asset in
-        backendByID[asset.backendID].map { CatalogAssetItem(asset: asset, backend: $0) }
-      }
-    }
-  }
-
   public static func resolve(_ identifier: String, in database: DatabasePool) throws
     -> CatalogAssetItem
   {
@@ -200,7 +195,10 @@ public enum CatalogAssets {
           liveUsageCount: row["live_usage_count"]
         )
       }
-      return CatalogAssetDetails(item: item, tags: tags, projects: projects)
+      return CatalogAssetDetails(
+        item: item, tags: tags, projects: projects,
+        favorite: try favoriteIDs(among: [item.asset], in: db).contains(assetID),
+        labels: try labelsByAssetID(for: [item.asset], in: db)[assetID] ?? [])
   }
 
   public static func addTag(
@@ -276,11 +274,8 @@ public enum CatalogAssets {
     in database: DatabasePool,
     now: Date = Date()
   ) throws {
-    try membershipChange(slug: slug, identifier: identifier, in: database, now: now) { db, assetID, projectID, date in
-      try db.execute(
-        sql: "INSERT OR IGNORE INTO asset_project (asset_id, project_id, added_at) VALUES (?, ?, ?)",
-        arguments: [assetID, projectID, date]
-      )
+    try forOneAsset {
+      _ = try addToProject(slug, identifiers: [identifier], in: database, now: now)
     }
   }
 
@@ -290,22 +285,39 @@ public enum CatalogAssets {
     in database: DatabasePool,
     now: Date = Date()
   ) async throws {
-    let item = try await resolve(identifier, in: database)
-    guard let assetID = item.asset.id else { throw AssetCatalogError.assetNotFound(identifier) }
-    try await database.write { db in
-      guard let project = try Project.filter(Column("slug") == slug).fetchOne(db),
-        let projectID = project.id
-      else {
-        throw AssetCatalogError.projectNotFound(slug)
-      }
-      try db.execute(
-        sql: "INSERT OR IGNORE INTO asset_project (asset_id, project_id, added_at) VALUES (?, ?, ?)",
-        arguments: [assetID, projectID, Self.timestamp(now)]
-      )
+    try await forOneAsset {
+      _ = try await addToProject(slug, identifiers: [identifier], in: database, now: now)
     }
   }
 
-  /// Removes the asset from a project. Removing a non-membership is a no-op.
+  @discardableResult
+  public static func addToProject(
+    _ slug: String,
+    identifiers: [String],
+    in database: DatabasePool,
+    dryRun: Bool = false,
+    now: Date = Date()
+  ) throws -> [CurationChange] {
+    let date = timestamp(now)
+    return try curate(identifiers, in: database, dryRun: dryRun) { db, assets in
+      try link(assets, to: slug, date: date, in: db)
+    }
+  }
+
+  @discardableResult
+  public static func addToProject(
+    _ slug: String,
+    identifiers: [String],
+    in database: DatabasePool,
+    dryRun: Bool = false,
+    now: Date = Date()
+  ) async throws -> [CurationChange] {
+    let date = timestamp(now)
+    return try await curate(identifiers, in: database, dryRun: dryRun) { db, assets in
+      try link(assets, to: slug, date: date, in: db)
+    }
+  }
+
   /// Removes the asset from a project. Removing a non-membership is a no-op.
   ///
   /// Live usage is a lower bound that never authorizes destructive action, so
@@ -319,14 +331,9 @@ public enum CatalogAssets {
     in database: DatabasePool,
     confirmed: Bool = false
   ) throws {
-    try membershipChange(slug: slug, identifier: identifier, in: database, now: Date()) { db, assetID, projectID, _ in
-      if !confirmed {
-        try requireNoLiveUsage(assetID: assetID, projectID: projectID, slug: slug, in: db)
-      }
-      try db.execute(
-        sql: "DELETE FROM asset_project WHERE asset_id = ? AND project_id = ?",
-        arguments: [assetID, projectID]
-      )
+    try forOneAsset {
+      _ = try removeFromProject(
+        slug, identifiers: [identifier], in: database, confirmed: confirmed)
     }
   }
 
@@ -336,21 +343,36 @@ public enum CatalogAssets {
     in database: DatabasePool,
     confirmed: Bool = false
   ) async throws {
-    try await database.write { db in
-      let item = try resolve(identifier, in: db)
-      guard let assetID = item.asset.id else { throw AssetCatalogError.assetNotFound(identifier) }
-      guard let project = try Project.filter(Column("slug") == slug).fetchOne(db),
-        let projectID = project.id
-      else {
-        throw AssetCatalogError.projectNotFound(slug)
-      }
-      if !confirmed {
-        try requireNoLiveUsage(assetID: assetID, projectID: projectID, slug: slug, in: db)
-      }
-      try db.execute(
-        sql: "DELETE FROM asset_project WHERE asset_id = ? AND project_id = ?",
-        arguments: [assetID, projectID]
-      )
+    try await forOneAsset {
+      _ = try await removeFromProject(
+        slug, identifiers: [identifier], in: database, confirmed: confirmed)
+    }
+  }
+
+  /// One referenced asset refuses the whole batch, and the error names each.
+  @discardableResult
+  public static func removeFromProject(
+    _ slug: String,
+    identifiers: [String],
+    in database: DatabasePool,
+    confirmed: Bool = false,
+    dryRun: Bool = false
+  ) throws -> [CurationChange] {
+    try curate(identifiers, in: database, dryRun: dryRun) { db, assets in
+      try unlink(assets, from: slug, projectID: projectID(slug, in: db), confirmed: confirmed, in: db)
+    }
+  }
+
+  @discardableResult
+  public static func removeFromProject(
+    _ slug: String,
+    identifiers: [String],
+    in database: DatabasePool,
+    confirmed: Bool = false,
+    dryRun: Bool = false
+  ) async throws -> [CurationChange] {
+    try await curate(identifiers, in: database, dryRun: dryRun) { db, assets in
+      try unlink(assets, from: slug, projectID: projectID(slug, in: db), confirmed: confirmed, in: db)
     }
   }
 
@@ -367,61 +389,95 @@ public enum CatalogAssets {
     confirmed: Bool = false,
     now: Date = Date()
   ) async throws {
-    try await database.write { db in
-      guard let assetRow = try resolveInWrite(identifier, db: db),
-        let assetID = assetRow.id
-      else {
-        throw AssetCatalogError.assetNotFound(identifier)
+    try await forOneAsset {
+      _ = try await moveAssets(
+        [identifier], fromProject: fromSlug, toProject: toSlug, in: database,
+        confirmed: confirmed, now: now)
+    }
+  }
+
+  /// `moveAsset` for any number of assets, all or none.
+  @discardableResult
+  public static func moveAssets(
+    _ identifiers: [String],
+    fromProject fromSlug: String?,
+    toProject toSlug: String?,
+    in database: DatabasePool,
+    confirmed: Bool = false,
+    dryRun: Bool = false,
+    now: Date = Date()
+  ) async throws -> [CurationChange] {
+    let date = timestamp(now)
+    return try await curate(identifiers, in: database, dryRun: dryRun) { db, assets in
+      // Both projects are looked up before either half is written.
+      let from = try fromSlug.map { (slug: $0, id: try projectID($0, in: db)) }
+      let to = try toSlug.map { (slug: $0, id: try projectID($0, in: db)) }
+      if let from {
+        try unlink(assets, from: from.slug, projectID: from.id, confirmed: confirmed, in: db)
       }
-      var fromID: Int64?
-      if let fromSlug {
-        guard let project = try Project.filter(Column("slug") == fromSlug).fetchOne(db),
-          let id = project.id
-        else {
-          throw AssetCatalogError.projectNotFound(fromSlug)
-        }
-        fromID = id
-      }
-      var toID: Int64?
-      if let toSlug {
-        guard let project = try Project.filter(Column("slug") == toSlug).fetchOne(db),
-          let id = project.id
-        else {
-          throw AssetCatalogError.projectNotFound(toSlug)
-        }
-        toID = id
-      }
-      if let fromID {
-        if !confirmed {
-          try requireNoLiveUsage(assetID: assetID, projectID: fromID, slug: fromSlug!, in: db)
-        }
-        try db.execute(
-          sql: "DELETE FROM asset_project WHERE asset_id = ? AND project_id = ?",
-          arguments: [assetID, fromID]
-        )
-      }
-      if let toID {
-        try db.execute(
-          sql: """
-            INSERT OR IGNORE INTO asset_project (asset_id, project_id, added_at)
-            VALUES (?, ?, ?)
-            """,
-          arguments: [assetID, toID, timestamp(now)]
-        )
+      if let to {
+        try link(assets, to: to.slug, date: date, in: db)
       }
     }
   }
 
-  private static func requireNoLiveUsage(
-    assetID: Int64, projectID: Int64, slug: String, in db: GRDB.Database
+  /// The one-asset forms report a failure as the error about that asset, not
+  /// as a batch of one.
+  private static func forOneAsset(_ body: () throws -> Void) throws {
+    do { try body() } catch let error as AssetCatalogError { throw error.forOneAsset }
+  }
+
+  private static func forOneAsset(_ body: () async throws -> Void) async throws {
+    do { try await body() } catch let error as AssetCatalogError { throw error.forOneAsset }
+  }
+
+  private static func projectID(_ slug: String, in db: GRDB.Database) throws -> Int64 {
+    guard let id = try Project.filter(Column("slug") == slug).fetchOne(db)?.id else {
+      throw AssetCatalogError.projectNotFound(slug)
+    }
+    return id
+  }
+
+  private static func link(
+    _ assets: [Asset], to slug: String, date: String, in db: GRDB.Database
   ) throws {
-    let live = try Int.fetchOne(
-      db,
-      sql: "SELECT n FROM asset_live_usage WHERE asset_id = ? AND project_id = ?",
-      arguments: [assetID, projectID]
-    ) ?? 0
-    if live > 0 {
-      throw AssetCatalogError.unlinkBlockedByLiveUsage(project: slug, liveCount: live)
+    let projectID = try projectID(slug, in: db)
+    for asset in assets {
+      try db.execute(
+        sql: "INSERT OR IGNORE INTO asset_project (asset_id, project_id, added_at) VALUES (?, ?, ?)",
+        arguments: [asset.id, projectID, date]
+      )
+    }
+  }
+
+  private static func unlink(
+    _ assets: [Asset], from slug: String, projectID: Int64, confirmed: Bool,
+    in db: GRDB.Database
+  ) throws {
+    if !confirmed {
+      try requireNoLiveUsage(assets, projectID: projectID, slug: slug, in: db)
+    }
+    for asset in assets {
+      try db.execute(
+        sql: "DELETE FROM asset_project WHERE asset_id = ? AND project_id = ?",
+        arguments: [asset.id, projectID]
+      )
+    }
+  }
+
+  private static func requireNoLiveUsage(
+    _ assets: [Asset], projectID: Int64, slug: String, in db: GRDB.Database
+  ) throws {
+    let blocked = try assets.compactMap { asset -> LiveUsedAsset? in
+      let live = try Int.fetchOne(
+        db,
+        sql: "SELECT n FROM asset_live_usage WHERE asset_id = ? AND project_id = ?",
+        arguments: [asset.id, projectID]
+      ) ?? 0
+      return live > 0 ? LiveUsedAsset(sha256: asset.sha256, key: asset.key, liveCount: live) : nil
+    }
+    if !blocked.isEmpty {
+      throw AssetCatalogError.unlinkBlockedForAssets(project: slug, assets: blocked)
     }
   }
 
@@ -480,28 +536,6 @@ public enum CatalogAssets {
         "DELETE FROM tag WHERE name = ? AND NOT EXISTS (SELECT 1 FROM asset_tag WHERE tag_id = tag.id)",
       arguments: [normalized]
     )
-  }
-
-  private static func membershipChange(
-    slug: String,
-    identifier: String,
-    in database: DatabasePool,
-    now: Date,
-    _ change: (GRDB.Database, Int64, Int64, String) throws -> Void
-  ) throws {
-    let date = Self.timestamp(now)
-    try database.write { db in
-      guard let assetRow = try resolveInWrite(identifier, db: db) else {
-        throw AssetCatalogError.assetNotFound(identifier)
-      }
-      guard let assetID = assetRow.id else { throw AssetCatalogError.assetNotFound(identifier) }
-      guard let project = try Project.filter(Column("slug") == slug).fetchOne(db),
-        let projectID = project.id
-      else {
-        throw AssetCatalogError.projectNotFound(slug)
-      }
-      try change(db, assetID, projectID, date)
-    }
   }
 
   /// An exact key, else an unambiguous sha256 prefix. A key is unique per
