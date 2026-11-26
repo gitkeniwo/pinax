@@ -12,7 +12,11 @@ struct PreviewDropZoneService: DropZoneService {
 
   func projects() throws -> [Project] { projectList }
 
-  func upload(_ fileURL: URL, projectSlug: String?) async throws -> UploadOutcome {
+  func prepare(_ fileURL: URL, projectSlug: String?) async throws -> PreparedDrop {
+    throw Inert()
+  }
+
+  func upload(_ prepared: PreparedDrop, useOriginal: Bool) async throws -> UploadOutcome {
     throw Inert()
   }
 

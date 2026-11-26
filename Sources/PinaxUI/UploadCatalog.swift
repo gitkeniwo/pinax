@@ -5,6 +5,7 @@ import GRDB
 public enum UploadCatalogError: Error, Equatable, CustomStringConvertible {
   case backendUnresolved
   case missingCredentials(String)
+  case notPrepared
 
   public var description: String {
     switch self {
@@ -15,7 +16,40 @@ public enum UploadCatalogError: Error, Equatable, CustomStringConvertible {
       return
         "Credentials for backend '\(slug)' are unavailable. "
         + "Register them with: pinax backend set-credentials --slug \(slug)"
+    case .notPrepared:
+      return "This upload was not prepared here."
     }
+  }
+}
+
+/// A file looked up and, when its project asks, recompressed: ready to
+/// upload.
+public struct PreparedDrop: Sendable {
+  public let fileURL: URL
+  public let projectSlug: String?
+  /// The copy that is about to be sent; nil when none was made.
+  public let compression: CardCompression?
+  /// `UploadCatalog`'s own half-done upload; nil from any other service.
+  let pending: (pipeline: UploadPipeline, upload: PreparedUpload)?
+
+  public init(fileURL: URL, projectSlug: String?, compression: CardCompression? = nil) {
+    self.fileURL = fileURL
+    self.projectSlug = projectSlug
+    self.compression = compression
+    self.pending = nil
+  }
+
+  init(
+    pipeline: UploadPipeline, upload: PreparedUpload, projectSlug: String?
+  ) {
+    self.fileURL = upload.fileURL
+    self.projectSlug = projectSlug
+    if let image = upload.compression?.compressedImage, let options = upload.compressionOptions {
+      self.compression = CardCompression(image: image, options: options)
+    } else {
+      self.compression = nil
+    }
+    self.pending = (pipeline, upload)
   }
 }
 
@@ -24,7 +58,12 @@ public enum UploadCatalogError: Error, Equatable, CustomStringConvertible {
 /// contacts the network or the keychain.
 public protocol DropZoneService: Sendable {
   func projects() throws -> [Project]
-  func upload(_ fileURL: URL, projectSlug: String?) async throws -> UploadOutcome
+  /// Everything before sending: resolves the destination, looks the file up
+  /// and recompresses it when the project asks.
+  func prepare(_ fileURL: URL, projectSlug: String?) async throws -> PreparedDrop
+  /// Sends a prepared file: its compressed copy when it has one, unless
+  /// `useOriginal`.
+  func upload(_ prepared: PreparedDrop, useOriginal: Bool) async throws -> UploadOutcome
   func moveAsset(
     sha256: String, fromProject: String?, toProject: String?, confirmed: Bool
   ) async throws
@@ -56,7 +95,14 @@ public struct UploadCatalog: DropZoneService {
     try CatalogConfiguration.projects(in: database)
   }
 
+  /// Both steps in one go.
   public func upload(_ fileURL: URL, projectSlug: String?) async throws -> UploadOutcome {
+    try await upload(prepare(fileURL, projectSlug: projectSlug), useOriginal: false)
+  }
+
+  /// Compression follows the project's switch; No Project is never
+  /// compressed.
+  public func prepare(_ fileURL: URL, projectSlug: String?) async throws -> PreparedDrop {
     let projects = try CatalogConfiguration.projects(in: database)
     var project: Project?
     if let projectSlug {
@@ -76,7 +122,14 @@ public struct UploadCatalog: DropZoneService {
       backend: backend,
       project: project
     )
-    return try await pipeline.upload(fileURL: fileURL)
+    let prepared = try await pipeline.prepare(
+      fileURL: fileURL, compression: CompressionChoice.project.options(for: project))
+    return PreparedDrop(pipeline: pipeline, upload: prepared, projectSlug: projectSlug)
+  }
+
+  public func upload(_ prepared: PreparedDrop, useOriginal: Bool) async throws -> UploadOutcome {
+    guard let pending = prepared.pending else { throw UploadCatalogError.notPrepared }
+    return try await pending.pipeline.upload(pending.upload, useOriginal: useOriginal)
   }
 
   /// Moves an asset's project membership atomically. `nil` sides mean "no

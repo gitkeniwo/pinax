@@ -10,7 +10,20 @@ import SwiftUI
 /// label, the List's words, the Shelf's one word, and its tooltip.
 struct DropZoneCardStatus: Equatable {
   enum Kind: Equatable {
-    case waiting, uploading, uploaded, inLibrary, failed
+    case waiting, compressing, uploading, uploaded, inLibrary, failed
+
+    /// Not landed yet: the picture is dimmed inside a ring.
+    var isPending: Bool { self == .waiting || self == .compressing || self == .uploading }
+  }
+
+  /// What a landed, recompressed upload adds after its time.
+  struct Savings: Equatable {
+    /// "−87%"; nil when the size barely changed.
+    let percent: String?
+    /// The percentage is a saving, and drawn as one.
+    let isSaving: Bool
+    /// "HEIC → JPEG"; nil when the format stayed.
+    let formatChange: String?
   }
 
   let kind: Kind
@@ -18,11 +31,19 @@ struct DropZoneCardStatus: Equatable {
   let listText: String
   let shelfText: String
   let help: String?
+  /// The Shelf word's tooltip: `help`, under the sizes of a recompressed
+  /// upload.
+  private(set) var shelfHelp: String?
+  /// "Just now" alone, and what follows it; set together, or not at all.
+  private(set) var when: String?
+  private(set) var savings: Savings?
 
   init(card: DropZoneModel.UploadCard, now: Date = Date()) {
     switch card.phase {
     case .waiting:
       self.init(.waiting, "Waiting", "Waiting…", "Waiting", nil)
+    case .compressing:
+      self.init(.compressing, "Compressing", "Compressing…", "Compressing", nil)
     case .uploading:
       self.init(.uploading, "Uploading", "Uploading…", "Uploading", nil)
     case .done(let outcome) where outcome.deduplicated:
@@ -31,9 +52,27 @@ struct DropZoneCardStatus: Equatable {
         "Same image is already in Pinax; no bytes were uploaded.")
     case .done(let outcome):
       let when = Self.uploadedWhen(card: card, outcome: outcome, now: now)
-      self.init(.uploaded, "Uploaded", when, when, outcome.url)
+      guard let compression = card.compression else {
+        self.init(.uploaded, "Uploaded", when, when, outcome.url)
+        break
+      }
+      let savings = Savings(
+        percent: compression.percentChange, isSaving: compression.isSmaller,
+        formatChange: compression.formatChange)
+      let short = [when, savings.percent].compactMap(\.self).joined(separator: " · ")
+      let full = [short, savings.formatChange].compactMap(\.self).joined(separator: " · ")
+      self.init(.uploaded, "Uploaded", full, short, outcome.url)
+      self.when = when
+      self.savings = savings
     case .failed(let message):
       self.init(.failed, "Failed", "Couldn’t upload", "Failed", message)
+    }
+    if case .done(let outcome) = card.phase, let compression = card.compression {
+      let sizes = [
+        PinaxFormat.dimensions(width: outcome.width, height: outcome.height),
+        compression.sizeChange, compression.formatChange,
+      ].compactMap(\.self).joined(separator: " · ")
+      shelfHelp = [sizes, help].compactMap(\.self).joined(separator: "\n")
     }
   }
 
@@ -43,6 +82,7 @@ struct DropZoneCardStatus: Equatable {
     listText = list
     shelfText = shelf
     self.help = help
+    shelfHelp = help
   }
 
   /// "Just now" for the first minute of a landing this run; otherwise how
@@ -59,6 +99,8 @@ struct DropZoneCardStatus: Equatable {
 /// fresh-upload glow fades — unless Reduce Motion is on, when the arc is a
 /// still quarter and the glow simply goes.
 struct DropZoneMotion: Equatable {
+  /// The dotted ring's dots travel round while compressing.
+  var ringMarches = false
   /// The upload ring fills from 12 o'clock while uploading.
   var ringFills = false
   /// A fresh upload's full ring fades out.
@@ -117,10 +159,38 @@ func dropZoneProjectName(_ slug: String?, in projects: [Project]) -> String {
   return "No project"
 }
 
+extension DropZoneCardStatus {
+  /// `listText` as drawn: a saving's percentage in its own hue, semibold.
+  func listWords(saving: Color) -> Text {
+    guard let when, let savings else { return Text(listText) }
+    var words = Text(when)
+    if let percent = savings.percent {
+      words = Text("\(words) · \(Self.percentWord(percent, savings.isSaving, saving))")
+    }
+    if let formatChange = savings.formatChange {
+      words = Text("\(words) · \(formatChange)")
+    }
+    return words
+  }
+
+  /// The Shelf's word as drawn: `shelfText`, or with `short` only the
+  /// percentage, for a cell too narrow for both.
+  func shelfWords(saving: Color, short: Bool = false) -> Text {
+    guard let when, let savings, let percent = savings.percent else { return Text(shelfText) }
+    let word = Self.percentWord(percent, savings.isSaving, saving)
+    return short ? word : Text("\(when) · \(word)")
+  }
+
+  private static func percentWord(_ percent: String, _ isSaving: Bool, _ hue: Color) -> Text {
+    isSaving ? Text(percent).foregroundStyle(hue).fontWeight(.semibold) : Text(percent)
+  }
+}
+
 // MARK: - The status layer
 
 /// The thumbnail with its status drawn on it: pending images are
-/// dimmed inside a ring (a turning arc while uploading); a fresh upload
+/// dimmed inside a ring (travelling dots around a glass knob while
+/// compressing, a filling arc while uploading); a fresh upload
 /// glows briefly; a deduplicated one has a see-through copy behind it; a
 /// failed one is grey with a glass retry knob.
 struct StatusThumbnail: View {
@@ -148,12 +218,14 @@ struct StatusThumbnail: View {
       .frame(width: width, height: height)
       .frame(maxWidth: width == nil ? .infinity : nil)
       .clipShape(shape(radius))
-      .opacity(status.kind == .waiting || status.kind == .uploading ? M.pendingImageOpacity : 1)
+      .opacity(status.kind.isPending ? M.pendingImageOpacity : 1)
       .saturation(status.kind == .failed ? 0 : 1)
       .brightness(status.kind == .failed ? M.failedImageBrightness : 0)
       .background { dedupeCopy }
       .overlay { paperRing }
       .overlay { ring }
+      .overlay { compressingRing }
+      .overlay { compressingKnob }
       .overlay { retryKnob }
       .overlay {
         // The layer's own extent: the farthest any status drawing reaches.
@@ -180,6 +252,7 @@ struct StatusThumbnail: View {
 
   private var motion: DropZoneMotion {
     DropZoneMotion(
+      ringMarches: status.kind == .compressing && !reducesMotion,
       ringFills: status.kind == .uploading && !reducesMotion,
       ringFades: status.kind == .uploaded && card.landedAt != nil && !ringFinished
         && !reducesMotion)
@@ -187,7 +260,7 @@ struct StatusThumbnail: View {
 
   private var layerOutset: CGFloat {
     switch status.kind {
-    case .waiting, .uploading: M.ringReach
+    case .waiting, .compressing, .uploading: M.ringReach
     case .inLibrary: M.statusOutset
     case .uploaded: ringFinished || card.landedAt == nil ? 0 : M.ringReach
     case .failed: 0
@@ -277,18 +350,56 @@ struct StatusThumbnail: View {
     }
   }
 
+  /// Compression reports no progress, so the dots only travel round; with
+  /// Reduce Motion they stand still.
+  @ViewBuilder
+  private var compressingRing: some View {
+    if status.kind == .compressing {
+      let shape = UploadRingShape(radius: radius + M.ringOutset)
+      let pitch = knob > M.knobList ? M.ringDotPitchLarge : M.ringDotPitch
+      GeometryReader { proxy in
+        // A whole number of dots, so none bunch up where the path closes.
+        let spacing = shape.dotSpacing(in: proxy.size, near: pitch)
+        TimelineView(.animation(paused: reducesMotion)) { context in
+          shape.stroke(
+            palette.uploading,
+            style: StrokeStyle(
+              lineWidth: M.ringWidth, lineCap: .round, dash: [0, spacing],
+              dashPhase: reducesMotion
+                ? 0 : CompressingRing.phase(at: context.date, spacing: spacing)))
+        }
+      }
+      .padding(-M.ringOutset)
+      .allowsHitTesting(false)
+    }
+  }
+
+  @ViewBuilder
+  private var compressingKnob: some View {
+    if status.kind == .compressing {
+      glassKnob(CompressingRing.symbol)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+  }
+
+  /// A white symbol on a small round of dark glass over the picture.
+  private func glassKnob(_ symbol: String) -> some View {
+    Image(systemName: symbol)
+      .fontWeight(.semibold)
+      .imageScale(knob > M.knobList ? .large : .small)
+      .foregroundStyle(.white)
+      .frame(width: knob, height: knob)
+      .background(.ultraThinMaterial, in: Circle())
+      .background(Color.black.opacity(M.knobScrim), in: Circle())
+      .environment(\.colorScheme, .dark)
+  }
+
   @ViewBuilder
   private var retryKnob: some View {
     if status.kind == .failed {
       Button(action: retry.perform) {
-        Image(systemName: retry.symbol)
-          .fontWeight(.semibold)
-          .imageScale(knob > M.knobList ? .large : .small)
-          .foregroundStyle(.white)
-          .frame(width: knob, height: knob)
-          .background(.ultraThinMaterial, in: Circle())
-          .background(Color.black.opacity(M.knobScrim), in: Circle())
-          .environment(\.colorScheme, .dark)
+        glassKnob(retry.symbol)
           .contentShape(Circle())
       }
       .buttonStyle(.plain)
@@ -296,6 +407,20 @@ struct StatusThumbnail: View {
       .accessibilityLabel(retry.help)
       .dropZoneLayout(.retry, card: card.id)
     }
+  }
+}
+
+/// The compressing state's symbol and the travel of its dots.
+enum CompressingRing {
+  static let symbol = "arrow.down.right.and.arrow.up.left"
+  /// Points a second along the path.
+  static let speed: Double = 10
+
+  /// Clockwise, like the upload ring's fill; one dot spacing per cycle.
+  static func phase(at date: Date, spacing: CGFloat) -> CGFloat {
+    guard spacing > 0 else { return 0 }
+    let travelled = date.timeIntervalSinceReferenceDate * speed
+    return -CGFloat(travelled.truncatingRemainder(dividingBy: Double(spacing)))
   }
 }
 
@@ -350,6 +475,15 @@ struct UploadRingShape: Shape {
       tangent2End: CGPoint(x: rect.midX, y: rect.minY), radius: r)
     path.closeSubpath()
     return path
+  }
+
+  /// The spacing closest to `pitch` that divides the outline into a whole
+  /// number of parts.
+  func dotSpacing(in size: CGSize, near pitch: CGFloat) -> CGFloat {
+    let r = min(radius, size.width / 2, size.height / 2)
+    let length = 2 * (size.width - 2 * r) + 2 * (size.height - 2 * r) + 2 * .pi * r
+    guard length > 0, pitch > 0 else { return pitch }
+    return length / max((length / pitch).rounded(), 1)
   }
 }
 
@@ -656,9 +790,10 @@ struct ResultCardView: View {
       .lineLimit(1)
     } else if status.kind == .uploaded {
       TimelineView(.periodic(from: .now, by: 30)) { context in
-        Text(DropZoneCardStatus(card: card, now: context.date).listText)
+        DropZoneCardStatus(card: card, now: context.date).listWords(saving: palette.done)
           .foregroundStyle(palette.secondary)
           .pinaxSecondary()
+          .lineLimit(1)
           .help(status.help ?? "")
       }
     } else {
@@ -670,7 +805,7 @@ struct ResultCardView: View {
     }
   }
 
-  /// Size · bytes; a failure's message in place of the size (the error
+  /// Size · bytes, or before → after; a failure's message in place of the size (the error
   /// line), its full text in the tooltip.
   private var metaRow: some View {
     HStack(spacing: M.metaSpacing) {
@@ -683,28 +818,32 @@ struct ResultCardView: View {
           .help(message)
           .dropZoneLayout(.error, card: card.id)
       } else {
-        // Before landing the line is blank but keeps its height, so every
-        // phase is one card height.
+        // With nothing to say yet the line is blank but keeps its height, so
+        // every phase is one card height.
         Text(metaText.isEmpty ? " " : metaText)
           .foregroundStyle(palette.secondary)
           .pinaxSecondary()
           .monospacedDigit()
           .lineLimit(1)
           .fixedSize()
+          .help(card.compression?.settingsSummary ?? "")
       }
     }
     .frame(maxWidth: .infinity, alignment: .leading)
     .dropZoneLayout(.meta, card: card.id)
   }
 
-  /// Pixel size · bytes once the upload has landed; before that nothing.
+  /// Pixel size · bytes once the upload has landed, the bytes as before →
+  /// after for a recompressed copy; while that copy uploads, before → after
+  /// alone; otherwise nothing.
   var metaText: String {
+    if card.phase == .uploading { return card.compression?.sizeChange ?? "" }
     guard case .done(let outcome) = card.phase else { return "" }
     var parts: [String] = []
     if let dimensions = PinaxFormat.dimensions(width: outcome.width, height: outcome.height) {
       parts.append(dimensions)
     }
-    parts.append(PinaxFormat.fileSize(outcome.byteSize))
+    parts.append(card.compression?.sizeChange ?? PinaxFormat.fileSize(outcome.byteSize))
     return parts.joined(separator: " · ")
   }
 

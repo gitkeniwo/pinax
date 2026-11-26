@@ -109,6 +109,50 @@ import Testing
     }
   }
 
+  @Test("Compressing, uploading with its sizes and a landed saving are the same height too; Reduce Motion stills the dots")
+  func compressionCards() async throws {
+    let directory = FileManager.default.temporaryDirectory
+      .appendingPathComponent("pinaxui-cards-squeeze-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let model = DropZoneModel.preview(directory: directory)
+    let samples = DropZonePreviewSamples.cards(
+      for: .results, pictures: DropZonePreviewSamples.pictures(in: directory), projectSlug: nil,
+      now: Date())
+    model.seedPreview(
+      cards: samples, draggedFileURLs: [], projects: [], selectedProjectSlug: nil)
+
+    let frames = await hostCards(model)
+    let heights = samples.map { frames[Part(card: $0.id, role: .card)]?.height ?? 0 }
+    let first = try #require(heights.first)
+    #expect(first > 0)
+    #expect(heights.allSatisfy { abs($0 - first) < 0.5 }, "\(heights)")
+
+    let compressing = try #require(samples.first { $0.phase == .compressing }?.id)
+    for reduces in [false, true] {
+      let state = DropZoneViewState()
+      state.reducesMotion = reduces
+      await hostPanel(model, state: state) { state.motions[compressing] != nil }
+      #expect(state.motions[compressing]?.ringMarches == !reduces, "\(state.motions)")
+      #expect(state.motions[compressing]?.ringFills == false)
+    }
+  }
+
+  @Test("The compressing dots divide the outline evenly and travel one spacing a cycle")
+  func compressingDots() {
+    let size = CGSize(width: 60, height: 60)
+    let shape = UploadRingShape(radius: 12)
+    let spacing = shape.dotSpacing(in: size, near: 5)
+    let length = 2 * (60 - 24) + 2 * (60 - 24) + 2 * CGFloat.pi * 12
+    let count = length / spacing
+    #expect(abs(count - count.rounded()) < 0.001)
+    #expect(abs(spacing - 5) < 0.2)
+    let date = Date(timeIntervalSinceReferenceDate: 100.123)
+    let phase = CompressingRing.phase(at: date, spacing: spacing)
+    #expect(phase <= 0 && phase > -spacing)
+    let later = date.addingTimeInterval(Double(spacing) / CompressingRing.speed)
+    #expect(abs(CompressingRing.phase(at: later, spacing: spacing) - phase) < 0.001)
+  }
+
   @Test("In the real panel, thumbnails, text columns and button rows share one left edge each")
   func cardsAlignInThePanel() async throws {
     let (model, service, _) = try makeModel()
@@ -920,7 +964,12 @@ private final class GatedUploadService: DropZoneService, @unchecked Sendable {
     ]
   }
 
-  func upload(_ fileURL: URL, projectSlug: String?) async throws -> UploadOutcome {
+  func prepare(_ fileURL: URL, projectSlug: String?) async throws -> PreparedDrop {
+    PreparedDrop(fileURL: fileURL, projectSlug: projectSlug)
+  }
+
+  func upload(_ prepared: PreparedDrop, useOriginal: Bool) async throws -> UploadOutcome {
+    let fileURL = prepared.fileURL
     let name = fileURL.lastPathComponent
     if name.hasPrefix("fail-") { throw GatedError() }
     if name.hasPrefix("block-") {

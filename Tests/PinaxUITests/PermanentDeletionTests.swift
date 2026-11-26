@@ -491,7 +491,12 @@ import Testing
 private struct OneShotUpload: DropZoneService {
   func projects() throws -> [Project] { [] }
 
-  func upload(_ fileURL: URL, projectSlug: String?) async throws -> UploadOutcome {
+  func prepare(_ fileURL: URL, projectSlug: String?) async throws -> PreparedDrop {
+    PreparedDrop(fileURL: fileURL, projectSlug: projectSlug)
+  }
+
+  func upload(_ prepared: PreparedDrop, useOriginal: Bool) async throws -> UploadOutcome {
+    let fileURL = prepared.fileURL
     let index = Int(fileURL.deletingPathExtension().lastPathComponent) ?? 0
     return UploadOutcome(
       sha256: PermanentDeletionTests.sha(index), key: "blog/\(index).png",
