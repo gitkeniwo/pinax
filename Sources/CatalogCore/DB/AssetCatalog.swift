@@ -57,70 +57,23 @@ public struct CatalogAssetDetails: Codable, Sendable {
   public let item: CatalogAssetItem
   public let tags: [String]
   public let projects: [ProjectUsageCount]
+  public let favorite: Bool
+  /// In Finder's order.
+  public let labels: [AssetLabel]
 
-  public init(item: CatalogAssetItem, tags: [String], projects: [ProjectUsageCount]) {
+  public init(
+    item: CatalogAssetItem, tags: [String], projects: [ProjectUsageCount],
+    favorite: Bool = false, labels: [AssetLabel] = []
+  ) {
     self.item = item
     self.tags = tags
     self.projects = projects
+    self.favorite = favorite
+    self.labels = labels
   }
 }
 
 public enum CatalogAssets {
-  public static func list(
-    in database: DatabasePool,
-    project: String? = nil,
-    tag: String? = nil,
-    state: String? = nil,
-    since: String? = nil,
-    limit: Int = 50
-  ) throws -> [CatalogAssetItem] {
-    try database.read { db in
-      var joins = ""
-      var conditions: [String] = []
-      var arguments: [DatabaseValueConvertible?] = []
-      if let project {
-        joins +=
-          " JOIN asset_project ap ON ap.asset_id = a.id JOIN project p ON p.id = ap.project_id"
-        conditions.append("p.slug = ?")
-        arguments.append(project)
-      }
-      if let tag {
-        joins += " JOIN asset_tag at ON at.asset_id = a.id JOIN tag t ON t.id = at.tag_id"
-        conditions.append("t.name = ?")
-        arguments.append(tag)
-      }
-      if let state {
-        conditions.append("a.state = ?")
-        arguments.append(state)
-      }
-      if let since {
-        conditions.append("a.uploaded_at >= ?")
-        arguments.append(since)
-      }
-      let whereClause = conditions.isEmpty ? "" : " WHERE " + conditions.joined(separator: " AND ")
-      arguments.append(limit)
-      let assets = try Asset.fetchAll(
-        db,
-        sql: """
-          SELECT DISTINCT a.*
-          FROM asset a\(joins)\(whereClause)
-          ORDER BY a.uploaded_at DESC, a.id DESC
-          LIMIT ?
-          """,
-        arguments: StatementArguments(arguments)
-      )
-      let backendIDs = Set(assets.map(\.backendID))
-      let backends = try Backend.filter(backendIDs.contains(Column("id"))).fetchAll(db)
-      let backendByID = Dictionary(
-        uniqueKeysWithValues: backends.compactMap { backend in
-          backend.id.map { ($0, backend) }
-        })
-      return assets.compactMap { asset in
-        backendByID[asset.backendID].map { CatalogAssetItem(asset: asset, backend: $0) }
-      }
-    }
-  }
-
   public static func resolve(_ identifier: String, in database: DatabasePool) throws
     -> CatalogAssetItem
   {
@@ -200,7 +153,10 @@ public enum CatalogAssets {
           liveUsageCount: row["live_usage_count"]
         )
       }
-      return CatalogAssetDetails(item: item, tags: tags, projects: projects)
+      return CatalogAssetDetails(
+        item: item, tags: tags, projects: projects,
+        favorite: try favoriteIDs(among: [item.asset], in: db).contains(assetID),
+        labels: try labelsByAssetID(for: [item.asset], in: db)[assetID] ?? [])
   }
 
   public static func addTag(

@@ -128,7 +128,9 @@ private func syncDetails(_ identifier: String, in database: DatabasePool) throws
 
       let pagedKeys = pages.flatMap(\.items).map(\.asset.key)
       #expect(Set(pagedKeys).count == 250)
-      let allKeys = try CatalogAssets.list(in: database, limit: 250).map(\.asset.key)
+      var unpaginated = AssetQuery()
+      unpaginated.limit = 250
+      let allKeys = try syncPage(unpaginated, in: database).items.map(\.asset.key)
       #expect(pagedKeys == allKeys)
     }
   }

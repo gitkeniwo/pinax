@@ -49,7 +49,7 @@ struct AssetDocument: Encodable {
   }
 }
 
-/// The fields `show` prints as a table, apart from the source line.
+/// The fields `show` prints as a table; `source` is the source line's kind.
 struct AssetRecordJSON: Encodable {
   @ExplicitNull var id: Int64?
   let sha256: String
@@ -63,7 +63,11 @@ struct AssetRecordJSON: Encodable {
   @ExplicitNull var originalFilename: String?
   let state: String
   let pinned: Bool
+  let favorite: Bool
+  let labels: [String]
   @ExplicitNull var note: String?
+  /// An `AssetSource` raw value.
+  let source: String
   /// The stored string, not parsed.
   let meta: String
   let uploadedAt: String
@@ -86,6 +90,9 @@ struct AssetRecordJSON: Encodable {
     originalFilename = asset.originalFilename
     state = asset.state
     pinned = asset.pinned
+    favorite = details.favorite
+    labels = details.labels.map(\.rawValue)
+    source = AssetSource.of(meta: asset.meta).rawValue
     note = asset.note
     meta = asset.meta
     uploadedAt = asset.uploadedAt
@@ -99,7 +106,7 @@ struct AssetRecordJSON: Encodable {
 
   enum CodingKeys: String, CodingKey {
     case id, sha256, backend, key, url, bytes, width, height, mime, state, pinned, note, meta
-    case tags, projects
+    case favorite, labels, source, tags, projects
     case originalFilename = "original_filename"
     case uploadedAt = "uploaded_at"
     case createdAt = "created_at"

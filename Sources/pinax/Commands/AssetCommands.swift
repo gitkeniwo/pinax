@@ -8,9 +8,86 @@ enum AssetListFormat: String, ExpressibleByArgument {
   case url
 }
 
-enum AssetState: String, ExpressibleByArgument {
+/// `--state`; `all` lifts the state condition.
+enum AssetStateFilter: String, ExpressibleByArgument, CaseIterable {
   case active
   case archived
+  case all
+
+  var queryState: AssetState? {
+    switch self {
+    case .active: .active
+    case .archived: .archived
+    case .all: nil
+    }
+  }
+}
+
+enum AssetSortKey: String, ExpressibleByArgument, CaseIterable {
+  case uploaded
+  case name
+  case size
+  case kind
+
+  var field: AssetSort.Field {
+    switch self {
+    case .uploaded: .uploadedAt
+    case .name: .name
+    case .size: .byteSize
+    case .kind: .kind
+    }
+  }
+}
+
+enum AssetSortOrder: String, EnumerableFlag {
+  case asc
+  case desc
+
+  var direction: AssetSort.Direction {
+    switch self {
+    case .asc: .ascending
+    case .desc: .descending
+    }
+  }
+}
+
+extension SearchField: ExpressibleByArgument {}
+extension SearchMatch: ExpressibleByArgument {}
+extension AssetLabel: ExpressibleByArgument {}
+extension AssetSource: ExpressibleByArgument {}
+
+/// `--after`'s string: the last row's keyset position and the sort that
+/// produced it, as base64url. Callers pass it back unchanged.
+struct AssetListCursor: Codable {
+  let field: String
+  let direction: String
+  let value: String
+  let id: Int64
+
+  static func encode(_ cursor: AssetCursor, sort: AssetSort) throws -> String {
+    let token = AssetListCursor(
+      field: sort.field.rawValue, direction: sort.direction.rawValue,
+      value: cursor.sortValue, id: cursor.id)
+    return try JSONEncoder().encode(token).base64EncodedString()
+      .replacingOccurrences(of: "+", with: "-")
+      .replacingOccurrences(of: "/", with: "_")
+      .replacingOccurrences(of: "=", with: "")
+  }
+
+  static func decode(_ text: String, sort: AssetSort) throws -> AssetCursor {
+    var base64 = text.replacingOccurrences(of: "-", with: "+")
+      .replacingOccurrences(of: "_", with: "/")
+    base64 += String(repeating: "=", count: (4 - base64.count % 4) % 4)
+    guard let data = Data(base64Encoded: base64),
+      let token = try? JSONDecoder().decode(AssetListCursor.self, from: data)
+    else {
+      throw ValidationError("'\(text)' is not a cursor.")
+    }
+    guard token.field == sort.field.rawValue, token.direction == sort.direction.rawValue else {
+      throw ValidationError("The cursor belongs to a different sort order.")
+    }
+    return AssetCursor(sortValue: token.value, id: token.id)
+  }
 }
 
 struct AssetListCommand: ParsableCommand {
@@ -25,44 +102,78 @@ struct AssetListCommand: ParsableCommand {
   @Option(name: .long)
   var tag: String?
 
-  @Option(name: .long)
-  var state: AssetState?
+  @Option(name: .long, help: "Which assets to list by state.")
+  var state: AssetStateFilter = .active
 
   @Option(
     name: .long,
     help: "Only include assets uploaded since YYYY-MM, YYYY-MM-DD, or an ISO-8601 timestamp.")
   var since: String?
 
+  @Option(
+    name: .long,
+    help: "Only include assets uploaded before YYYY-MM, YYYY-MM-DD, or an ISO-8601 timestamp.")
+  var until: String?
+
+  @Option(name: .long, help: "Only include assets whose filename, key, or note matches.")
+  var search: String?
+
+  @Option(name: .long, help: "What --search looks at.")
+  var searchField: SearchField = .any
+
+  @Option(name: .long, help: "How --search compares.")
+  var match: SearchMatch = .contains
+
+  @Flag(name: .long, help: "Make --search case-sensitive.")
+  var caseSensitive = false
+
+  @Option(name: .long, help: "Only include keys under this path, such as blog/2026.")
+  var keyPrefix: String?
+
+  @Option(name: .long, help: "Only include one backend's assets, by slug.")
+  var backend: String?
+
+  @Flag(name: .long, help: "Only include favorites.")
+  var favorites = false
+
+  @Option(name: .long, help: "Only include assets with this color label.")
+  var label: AssetLabel?
+
+  @Option(name: .long, help: "Only include assets from this source; repeat for several.")
+  var source: [AssetSource] = []
+
+  @Option(name: .long)
+  var sort: AssetSortKey = .uploaded
+
+  @Flag(help: "Sort direction; descending by default.")
+  var order: AssetSortOrder = .desc
+
   @Option(name: .long)
   var limit = 50
+
+  @Option(name: .long, help: "Continue after the `next` cursor of a JSON listing.")
+  var after: String?
 
   @Option(name: .long)
   var format: AssetListFormat = .table
 
   mutating func run() throws {
-    guard limit > 0 else {
-      throw ValidationError("Limit must be greater than zero.")
-    }
+    var query = try query()
     let database = try openCatalogDatabase()
-    let items = try CatalogAssets.list(
-      in: database,
-      project: project,
-      tag: tag,
-      state: state?.rawValue,
-      since: try normalizedSince(since),
-      limit: limit
-    )
+    if let backend {
+      query.backendID = try CatalogConfiguration.backend(slug: backend, in: database).id
+    }
+    let page = try CatalogAssets.page(query, in: database)
     switch format {
     case .url:
-      for item in items {
+      for item in page.items {
         print(item.url)
       }
     case .json:
-      print(
-        try PublicAssetJSON.encode(items.map { PublicAsset(asset: $0.asset, backend: $0.backend) }))
+      print(try encodedJSON(AssetListDocument(page, sort: query.sort)))
     case .table:
       print("SHA256\tSTATE\tBYTES\tKEY\tURL")
-      for item in items {
+      for item in page.items {
         print(
           "\(item.asset.sha256.prefix(12))\t\(item.asset.state)\t\(item.asset.byteSize)\t\(item.asset.key)\t\(item.url)"
         )
@@ -70,7 +181,40 @@ struct AssetListCommand: ParsableCommand {
     }
   }
 
-  private func normalizedSince(_ value: String?) throws -> String? {
+  /// The query the flags describe, apart from `--backend`, whose id needs
+  /// the catalog. A bad argument throws here, before the catalog is opened.
+  func query() throws -> AssetQuery {
+    guard limit > 0 else {
+      throw ValidationError("Limit must be greater than zero.")
+    }
+    var query = AssetQuery()
+    query.sort = AssetSort(field: sort.field, direction: order.direction)
+    query.project = project
+    query.tag = tag
+    query.state = state.queryState
+    query.since = try normalizedDate(since, option: "Since")
+    query.until = try normalizedDate(until, option: "Until")
+    query.search = search
+    query.searchField = searchField
+    query.searchMatch = match
+    query.searchCaseSensitive = caseSensitive
+    if let keyPrefix {
+      let trimmed = keyPrefix.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+      guard !trimmed.isEmpty else {
+        throw ValidationError("Key prefix must not be empty.")
+      }
+      query.keyPrefix = trimmed
+    }
+    query.favoritesOnly = favorites
+    query.label = label
+    query.sources = Set(source)
+    // A page reads one row past its limit.
+    query.limit = min(limit, Int.max - 1)
+    query.after = try after.map { try AssetListCursor.decode($0, sort: query.sort) }
+    return query
+  }
+
+  private func normalizedDate(_ value: String?, option: String) throws -> String? {
     guard let value else { return nil }
     let normalized: String
     if value.count == 7,
@@ -88,9 +232,66 @@ struct AssetListCommand: ParsableCommand {
       normalized = value
     }
     guard ISO8601DateFormatter().date(from: normalized) != nil else {
-      throw ValidationError("Since must be YYYY-MM, YYYY-MM-DD, or an ISO-8601 timestamp.")
+      throw ValidationError("\(option) must be YYYY-MM, YYYY-MM-DD, or an ISO-8601 timestamp.")
     }
     return normalized
+  }
+}
+
+// MARK: - pinax ls --format json
+
+/// One page of `ls`, in the table's order, in the asset document of
+/// docs/FORMATS.md with keys added. `next` is null on the last page.
+struct AssetListDocument: Encodable {
+  let schema = 1
+  let assets: [ListedAssetJSON]
+  @ExplicitNull var next: String?
+
+  init(_ page: AssetPage, sort: AssetSort) throws {
+    assets = page.items.map { item in
+      let id = item.asset.id
+      return ListedAssetJSON(
+        item,
+        favorite: id.map(page.favoriteIDs.contains) ?? false,
+        labels: id.flatMap { page.labelsByAssetID[$0] } ?? [],
+        tags: id.flatMap { page.tagsByAssetID[$0] } ?? [])
+    }
+    next = try page.next.map { try AssetListCursor.encode($0, sort: sort) }
+  }
+}
+
+/// The keys of an asset in `upload` JSON, encoded as there, and what the
+/// catalog knows besides.
+struct ListedAssetJSON: Encodable {
+  let published: PublicAsset
+  let catalog: CatalogFields
+
+  struct CatalogFields: Encodable {
+    let backend: String
+    let state: String
+    let favorite: Bool
+    let labels: [String]
+    let tags: [String]
+    let source: String
+    @ExplicitNull var note: String?
+  }
+
+  init(_ item: CatalogAssetItem, favorite: Bool, labels: [AssetLabel], tags: [String]) {
+    published = PublicAsset(asset: item.asset, backend: item.backend)
+    catalog = CatalogFields(
+      backend: item.backend.slug,
+      state: item.asset.state,
+      favorite: favorite,
+      labels: labels.map(\.rawValue),
+      tags: tags,
+      source: AssetSource.of(meta: item.asset.meta).rawValue,
+      note: item.asset.note)
+  }
+
+  /// Both write their keys into the same object.
+  func encode(to encoder: Encoder) throws {
+    try published.encode(to: encoder)
+    try catalog.encode(to: encoder)
   }
 }
 
@@ -139,6 +340,8 @@ struct AssetShowCommand: ParsableCommand {
     print("original-filename: \(asset.originalFilename ?? "")")
     print("state: \(asset.state)")
     print("pinned: \(asset.pinned)")
+    print("favorite: \(details.favorite)")
+    print("labels: \(details.labels.map(\.rawValue).joined(separator: ","))")
     print("note: \(asset.note ?? "")")
     print("meta: \(asset.meta)")
     print(

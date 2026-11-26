@@ -45,6 +45,7 @@ import Testing
             "url": "https://img.example.com/blog/asset-0.png", "bytes": 1000,
             "width": 800, "height": 600, "mime": "image/png",
             "original_filename": "asset-0.png", "state": "active", "pinned": false,
+            "favorite": false, "labels": [String](), "source": "pinax",
             "note": "hello", "meta": "{}", "uploaded_at": "2026-08-01T00:00:00Z",
             "created_at": "2026-08-01T00:00:00Z", "updated_at": "2026-08-01T00:00:00Z",
             "tags": ["cats"],
