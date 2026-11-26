@@ -23,6 +23,30 @@ public enum S3UploaderError: Error, Equatable, CustomStringConvertible {
   }
 }
 
+/// Sends a request again, with exponential backoff, while it is answered with
+/// HTTP 429 or 5xx; after `maxRetries` the last answer is returned.
+enum S3Retry {
+  static func data(
+    for request: URLRequest, session: URLSession, maxRetries: Int, baseDelay: TimeInterval
+  ) async throws -> (Data, URLResponse) {
+    for attempt in 0..<maxRetries {
+      let result = try await session.data(for: request)
+      guard let response = result.1 as? HTTPURLResponse else {
+        return result
+      }
+      let retryable = response.statusCode == 429 || (500..<600).contains(response.statusCode)
+      guard retryable else {
+        return result
+      }
+      let delay = baseDelay * pow(2, Double(attempt))
+      if delay > 0 {
+        try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+      }
+    }
+    return try await session.data(for: request)
+  }
+}
+
 public struct S3Uploader: Uploader {
   public static let immutableCacheControl = "public, max-age=31536000, immutable"
 
@@ -155,21 +179,8 @@ public struct S3Uploader: Uploader {
   }
 
   private func send(_ request: URLRequest) async throws -> (Data, URLResponse) {
-    for attempt in 0..<maxRetries {
-      let result = try await session.data(for: request)
-      guard let response = result.1 as? HTTPURLResponse else {
-        return result
-      }
-      let retryable = response.statusCode == 429 || (500..<600).contains(response.statusCode)
-      guard retryable else {
-        return result
-      }
-      let delay = baseRetryDelay * pow(2, Double(attempt))
-      if delay > 0 {
-        try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
-      }
-    }
-    return try await session.data(for: request)
+    try await S3Retry.data(
+      for: request, session: session, maxRetries: maxRetries, baseDelay: baseRetryDelay)
   }
 
   private static func httpResponse(_ response: URLResponse) throws -> HTTPURLResponse {

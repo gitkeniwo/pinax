@@ -125,6 +125,39 @@ struct ProjectUsageJSON: Encodable {
   }
 }
 
+// MARK: - pinax object head
+
+struct ObjectDocument: Encodable {
+  let schema = "pinax.object.v1"
+  let backend: String
+  let key: String
+  let bytes: Int64
+  @ExplicitNull var contentType: String?
+  /// As sent, quotes included.
+  @ExplicitNull var etag: String?
+  @ExplicitNull var cacheControl: String?
+  @ExplicitNull var lastModified: String?
+  let metadata: [String: String]
+
+  init(_ head: S3ObjectHead, backend: String) {
+    self.backend = backend
+    key = head.key
+    bytes = head.byteSize
+    contentType = head.mime
+    etag = head.etag
+    cacheControl = head.cacheControl
+    lastModified = head.lastModified
+    metadata = head.metadata
+  }
+
+  enum CodingKeys: String, CodingKey {
+    case schema, backend, key, bytes, etag, metadata
+    case contentType = "content_type"
+    case cacheControl = "cache_control"
+    case lastModified = "last_modified"
+  }
+}
+
 // MARK: - pinax archive, unarchive, favorite, label, project link, unlink, move
 
 /// Each asset the command resolved, before and after; the two are equal when

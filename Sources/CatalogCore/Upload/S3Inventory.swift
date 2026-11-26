@@ -19,6 +19,8 @@ public struct S3ObjectHead: Equatable, Sendable {
   public let lastModified: String?
   public let metadata: [String: String]
   public let cacheControl: String?
+  /// As sent, quotes included.
+  public let etag: String?
 
   public init(
     key: String,
@@ -26,7 +28,8 @@ public struct S3ObjectHead: Equatable, Sendable {
     mime: String?,
     lastModified: String?,
     metadata: [String: String],
-    cacheControl: String? = nil
+    cacheControl: String? = nil,
+    etag: String? = nil
   ) {
     self.key = key
     self.byteSize = byteSize
@@ -34,6 +37,70 @@ public struct S3ObjectHead: Equatable, Sendable {
     self.lastModified = lastModified
     self.metadata = metadata
     self.cacheControl = cacheControl
+    self.etag = etag
+  }
+}
+
+/// An object's bytes and headers as the bucket returned them to a signed GET.
+public struct S3StoredObject: Equatable, Sendable {
+  public let key: String
+  public let data: Data
+  /// As sent, quotes included, so it can be sent back unchanged.
+  public let etag: String
+  /// The whole header value, parameters included.
+  public let contentType: String?
+  /// Nil when the object has none.
+  public let cacheControl: String?
+  public let contentLength: Int64
+  public let lastModified: String?
+  /// `x-amz-meta-*`, with the prefix removed and the name lowercased.
+  public let metadata: [String: String]
+  /// Whichever of `Content-Encoding`, `Content-Disposition`,
+  /// `Content-Language` and `Expires` the response has, under those names.
+  public let otherHeaders: [String: String]
+
+  public init(
+    key: String,
+    data: Data,
+    etag: String,
+    contentType: String?,
+    cacheControl: String?,
+    contentLength: Int64,
+    lastModified: String?,
+    metadata: [String: String],
+    otherHeaders: [String: String] = [:]
+  ) {
+    self.key = key
+    self.data = data
+    self.etag = etag
+    self.contentType = contentType
+    self.cacheControl = cacheControl
+    self.contentLength = contentLength
+    self.lastModified = lastModified
+    self.metadata = metadata
+    self.otherHeaders = otherHeaders
+  }
+}
+
+public enum ObjectReadError: Error, Equatable, CustomStringConvertible {
+  case notFound(String)
+  /// The received bytes cannot be shown to be the stored ones: their count is
+  /// not `Content-Length`, or there is none. `URLSession` decompresses some
+  /// encodings by itself, which also ends up here.
+  case lengthMismatch(key: String, expected: Int64?, received: Int64, contentEncoding: String?)
+  case missingETag(String)
+
+  public var description: String {
+    switch self {
+    case let .notFound(key):
+      return "Object does not exist: \(key)"
+    case let .lengthMismatch(key, expected, received, contentEncoding):
+      let promised = expected.map { "Content-Length was \($0)" } ?? "there was no Content-Length"
+      let encoding = contentEncoding.map { " (Content-Encoding: \($0))" } ?? ""
+      return "Read of \(key) is unverifiable: received \(received) bytes, \(promised)\(encoding)."
+    case let .missingETag(key):
+      return "The response for \(key) has no ETag."
+    }
   }
 }
 
@@ -42,22 +109,34 @@ public protocol ObjectInventory: Sendable {
   func headObject(key: String) async throws -> S3ObjectHead
 }
 
-public struct S3ObjectInventory: ObjectInventory {
+public protocol ObjectReading: Sendable {
+  func getObject(key: String) async throws -> S3StoredObject
+}
+
+public struct S3ObjectInventory: ObjectInventory, ObjectReading {
   private let backend: Backend
   private let signer: SigV4Signer
   private let session: URLSession
   private let requestTimeout: TimeInterval
+  private let maxRetries: Int
+  private let baseRetryDelay: TimeInterval
 
+  /// - Parameters:
+  ///   - maxRetries: for `getObject`, after an HTTP 429 or 5xx.
   public init(
     backend: Backend,
     credentials: BackendCredentials,
     session: URLSession = .shared,
-    requestTimeout: TimeInterval = 60
+    requestTimeout: TimeInterval = 60,
+    maxRetries: Int = 3,
+    baseRetryDelay: TimeInterval = 0.25
   ) {
     self.backend = backend
     signer = SigV4Signer(credentials: credentials, region: backend.region, service: "s3")
     self.session = session
     self.requestTimeout = requestTimeout
+    self.maxRetries = max(0, maxRetries)
+    self.baseRetryDelay = max(0, baseRetryDelay)
   }
 
   public func listObjects() async throws -> [S3ObjectSummary] {
@@ -91,8 +170,12 @@ public struct S3ObjectInventory: ObjectInventory {
     var request = URLRequest(url: try objectURL(key: key))
     request.httpMethod = "HEAD"
     request.timeoutInterval = requestTimeout
+    request.cachePolicy = .reloadIgnoringLocalCacheData
     request.setValue(Self.emptyPayloadHash, forHTTPHeaderField: "x-amz-content-sha256")
-    let signed = try signer.sign(request, payloadHash: Self.emptyPayloadHash)
+    var signed = try signer.sign(request, payloadHash: Self.emptyPayloadHash)
+    // As in `getObject`. Otherwise `URLSession` offers gzip, and a CDN may
+    // answer with a weak ETag and no length, as it would for a compressed body.
+    signed.setValue("identity", forHTTPHeaderField: "Accept-Encoding")
     let (data, response) = try await session.data(for: signed)
     let http = try httpResponse(response)
     guard (200..<300).contains(http.statusCode) else {
@@ -101,21 +184,77 @@ public struct S3ObjectInventory: ObjectInventory {
         body: String(decoding: data, as: UTF8.self)
       )
     }
-    var metadata: [String: String] = [:]
-    for (name, value) in http.allHeaderFields {
-      let normalizedName = String(describing: name).lowercased()
-      guard normalizedName.hasPrefix("x-amz-meta-") else { continue }
-      metadata[String(normalizedName.dropFirst("x-amz-meta-".count))] = String(describing: value)
-    }
     return S3ObjectHead(
       key: key,
       byteSize: Int64(http.value(forHTTPHeaderField: "Content-Length") ?? "") ?? 0,
       mime: http.value(forHTTPHeaderField: "Content-Type")?.split(separator: ";").first.map(
         String.init),
       lastModified: http.value(forHTTPHeaderField: "Last-Modified"),
-      metadata: metadata,
-      cacheControl: http.value(forHTTPHeaderField: "Cache-Control")
+      metadata: Self.userMetadata(http),
+      cacheControl: http.value(forHTTPHeaderField: "Cache-Control"),
+      etag: http.value(forHTTPHeaderField: "ETag")
     )
+  }
+
+  public func getObject(key: String) async throws -> S3StoredObject {
+    var request = URLRequest(url: try objectURL(key: key))
+    request.httpMethod = "GET"
+    request.timeoutInterval = requestTimeout
+    // An `immutable` object would otherwise be answered from the URL cache.
+    request.cachePolicy = .reloadIgnoringLocalCacheData
+    request.setValue(Self.emptyPayloadHash, forHTTPHeaderField: "x-amz-content-sha256")
+    var signed = try signer.sign(request, payloadHash: Self.emptyPayloadHash)
+    // Added after signing, so an intermediary may rewrite it.
+    signed.setValue("identity", forHTTPHeaderField: "Accept-Encoding")
+    let (data, response) = try await S3Retry.data(
+      for: signed, session: session, maxRetries: maxRetries, baseDelay: baseRetryDelay)
+    let http = try httpResponse(response)
+    if http.statusCode == 404 {
+      throw ObjectReadError.notFound(key)
+    }
+    guard (200..<300).contains(http.statusCode) else {
+      throw S3UploaderError.http(
+        statusCode: http.statusCode,
+        body: String(decoding: data, as: UTF8.self)
+      )
+    }
+    let contentLength = http.value(forHTTPHeaderField: "Content-Length").flatMap { Int64($0) }
+    guard let contentLength, contentLength == Int64(data.count) else {
+      throw ObjectReadError.lengthMismatch(
+        key: key,
+        expected: contentLength,
+        received: Int64(data.count),
+        contentEncoding: http.value(forHTTPHeaderField: "Content-Encoding")
+      )
+    }
+    guard let etag = http.value(forHTTPHeaderField: "ETag") else {
+      throw ObjectReadError.missingETag(key)
+    }
+    var otherHeaders: [String: String] = [:]
+    for name in ["Content-Encoding", "Content-Disposition", "Content-Language", "Expires"] {
+      otherHeaders[name] = http.value(forHTTPHeaderField: name)
+    }
+    return S3StoredObject(
+      key: key,
+      data: data,
+      etag: etag,
+      contentType: http.value(forHTTPHeaderField: "Content-Type"),
+      cacheControl: http.value(forHTTPHeaderField: "Cache-Control"),
+      contentLength: contentLength,
+      lastModified: http.value(forHTTPHeaderField: "Last-Modified"),
+      metadata: Self.userMetadata(http),
+      otherHeaders: otherHeaders
+    )
+  }
+
+  private static func userMetadata(_ response: HTTPURLResponse) -> [String: String] {
+    var metadata: [String: String] = [:]
+    for (name, value) in response.allHeaderFields {
+      let normalizedName = String(describing: name).lowercased()
+      guard normalizedName.hasPrefix("x-amz-meta-") else { continue }
+      metadata[String(normalizedName.dropFirst("x-amz-meta-".count))] = String(describing: value)
+    }
+    return metadata
   }
 
   private func bucketURL(continuationToken: String?) throws -> URL {

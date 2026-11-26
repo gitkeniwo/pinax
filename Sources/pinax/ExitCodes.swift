@@ -73,6 +73,11 @@ enum CLIExit {
       case .http, .invalidResponse: return remote
       case .invalidEndpoint, .invalidMetadataKey, .nonASCIIHeaderValue: return nil
       }
+    case let error as ObjectReadError:
+      switch error {
+      case .notFound: return notFound
+      case .lengthMismatch, .missingETag: return remote
+      }
     case is PublicObjectFetchError, is URLError:
       return remote
     case let error as RewriteRunError:
