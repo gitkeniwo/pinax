@@ -13,6 +13,13 @@ import Testing
   static let a = "blog/202610/a-111111111111.png"
   static let b = "blog/202610/b-222222222222.png"
 
+  /// The asset row's columns, as values that can leave an async read (`Row` cannot).
+  @Sendable private static func assetColumns(_ db: GRDB.Database) throws -> [String: DatabaseValue]? {
+    try Row.fetchOne(db, sql: "SELECT * FROM asset").map {
+      Dictionary(uniqueKeysWithValues: $0.map { ($0, $1) })
+    }
+  }
+
   // MARK: The normal path
 
   @Test("Delete: HEAD, DELETE, HEAD for exactly the staged key; the tombstone goes; the rest stays")
@@ -379,12 +386,12 @@ import Testing
     defer { f.remove() }
     try f.seedUsed(Self.a, sha: f.sha("a"))
     try await f.db.write { try $0.execute(sql: "UPDATE asset SET favorite = 1, note = 'n'") }
-    let before = try await f.db.read { try Row.fetchOne($0, sql: "SELECT * FROM asset") }
+    let before = try await f.db.read(Self.assetColumns)
     FakeBucket.reset(allow: [], objects: [Self.a: f.sha("a")])
     try CatalogDeletion.stage([Self.a], in: f.db, includeUsed: true)
     let id = try CatalogDeletion.pending(in: f.db)[0].id
     try await CatalogDeletion.restore(id, in: f.db)
-    let after = try await f.db.read { try Row.fetchOne($0, sql: "SELECT * FROM asset") }
+    let after = try await f.db.read(Self.assetColumns)
     #expect(after == before)
     let counts = try ["asset_project", "asset_tag", "asset_label", "tag", "pending_deletion"].map(f.count)
     #expect(counts == [1, 1, 1, 1, 0])

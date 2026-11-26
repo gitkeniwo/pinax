@@ -184,6 +184,27 @@ import Testing
     }
   }
 
+  @Test("A cursor always encodes to the same string, and key order does not matter to decoding")
+  func cursorEncoding() throws {
+    let sort = AssetSort(field: .name, direction: .ascending)
+    let cursor = AssetCursor(sortValue: "apple.jpg", id: 2)
+    let text = try AssetListCursor.encode(cursor, sort: sort)
+    #expect(try AssetListCursor.encode(cursor, sort: sort) == text)
+    // Two encodes in one process can agree by chance, so pin the bytes too.
+    let sorted = #"{"direction":"ascending","field":"name","id":2,"value":"apple.jpg"}"#
+    let unsorted = #"{"value":"apple.jpg","id":2,"field":"name","direction":"ascending"}"#
+    func base64URL(_ json: String) -> String {
+      Data(json.utf8).base64EncodedString()
+        .replacingOccurrences(of: "+", with: "-")
+        .replacingOccurrences(of: "/", with: "_")
+        .replacingOccurrences(of: "=", with: "")
+    }
+    #expect(text == base64URL(sorted))
+    for json in [sorted, unsorted] {
+      #expect(try AssetListCursor.decode(base64URL(json), sort: sort) == cursor)
+    }
+  }
+
   @Test("A bad argument is 64, an unknown backend 66")
   func badArguments() throws {
     try withFixture { _, directory in
