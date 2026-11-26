@@ -47,6 +47,9 @@ public struct CatalogExternalsMigrator: ExternalsMigrating {
   private let credentialsLoader: @Sendable (Backend) throws -> BackendCredentials?
   /// The migration core's download cache; tests pass a temporary one.
   private let cacheRoot: URL
+  /// For the rescans after an apply.
+  let commands: CommandSourcePolicy
+  private let runner: CommandSourceRunning
 
   public init(
     database: CatalogDatabasePool,
@@ -54,8 +57,12 @@ public struct CatalogExternalsMigrator: ExternalsMigrating {
     credentialsLoader: @escaping @Sendable (Backend) throws -> BackendCredentials? = {
       try Keychain().load(for: $0.keychainRef)
     },
-    cacheRoot: URL = ExternalMigration.defaultCacheRoot()
+    cacheRoot: URL = ExternalMigration.defaultCacheRoot(),
+    commands: CommandSourcePolicy = .deny,
+    runner: CommandSourceRunning = ShellCommandRunner()
   ) {
+    self.commands = commands
+    self.runner = runner
     self.cacheRoot = cacheRoot
     self.database = database
     self.fetcher = fetcher
@@ -86,7 +93,7 @@ public struct CatalogExternalsMigrator: ExternalsMigrating {
     return try await ExternalMigration.apply(
       fromRun: runID, allowedSources: allowedSources, database: database,
       uploader: S3Uploader(backend: backend, credentials: credentials), cacheRoot: cacheRoot,
-      cancellation: cancellation, progress: progress)
+      cancellation: cancellation, progress: progress, commands: commands, runner: runner)
   }
 
   public func diff(ofRun runID: Int64) async throws -> String {

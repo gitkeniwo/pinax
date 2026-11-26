@@ -128,6 +128,8 @@ extension GalleryModel {
     case .running: return .running(activity.text)
     case .finished: return ActivityItem(text: activity.text, phase: .finished)
     case .failed: return ActivityItem(text: activity.text, phase: .failed)
+    case .commandNeedsApproval, .emptyScanHeld:
+      return ActivityItem(text: activity.text, phase: .warnings)
     case let .summary(_, failures):
       return ActivityItem(text: activity.text, phase: failures.isEmpty ? .finished : .warnings)
     }

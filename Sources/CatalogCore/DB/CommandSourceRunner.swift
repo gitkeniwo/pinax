@@ -35,13 +35,22 @@ public enum CommandSourceError: Error, Equatable, CustomStringConvertible {
 /// Which command sources a scan may run. A command travels with the catalog,
 /// so the caller decides; the catalog itself never allows one.
 public struct CommandSourcePolicy: Sendable {
-  private let decide: @Sendable (ProjectSource) -> Bool
+  private let decide: @Sendable (String, ProjectSource) -> Bool
 
+  /// One answer for a source, whichever project holds it.
   public init(allows: @escaping @Sendable (ProjectSource) -> Bool) {
-    decide = allows
+    decide = { _, source in allows(source) }
   }
 
-  public func allows(_ source: ProjectSource) -> Bool { decide(source) }
+  /// An answer for a source of one project, by its slug: one policy can
+  /// then serve a run that rescans several projects.
+  public init(allowsInProject: @escaping @Sendable (String, ProjectSource) -> Bool) {
+    decide = allowsInProject
+  }
+
+  public func allows(_ source: ProjectSource, in project: String) -> Bool {
+    decide(project, source)
+  }
 
   public static let deny = CommandSourcePolicy { _ in false }
   public static let allow = CommandSourcePolicy { _ in true }
