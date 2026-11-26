@@ -17,6 +17,7 @@ struct Pinax: AsyncParsableCommand {
       AssetListCommand.self,
       AssetShowCommand.self,
       AssetURLCommand.self,
+      ObjectCommand.self,
       NoteCommand.self,
       ExportCommand.self,
       TagCommand.self,
