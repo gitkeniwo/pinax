@@ -12,6 +12,42 @@ import Testing
 @MainActor
 @Suite struct ProjectSettingsModelTests {
 
+  @Test("Pattern text splits on commas outside braces only")
+  func patternsKeepBraceGroupsWhole() {
+    #expect(
+      ProjectSettingsModel.patterns(" **/*.{md,mdx} ,, docs/{a,b}/*.{css,scss}, *.astro ")
+        == ["**/*.{md,mdx}", "docs/{a,b}/*.{css,scss}", "*.astro"])
+    // A brace that never closes is a literal and holds nothing together.
+    #expect(ProjectSettingsModel.patterns("a{b, c") == ["a{b", "c"])
+    #expect(ProjectSettingsModel.patterns("a}b, {c,d}") == ["a}b", "{c,d}"])
+  }
+
+  @Test("Editing a source's label or exclude leaves the default include stored as empty")
+  func editingOtherFieldsKeepsTheDefaultInclude() throws {
+    try withSettingsDatabase { database in
+      try CatalogConfiguration.setProjectSources(
+        slug: "blog", [ProjectSource(label: "site", path: "/Users/someone/site")], in: database)
+      let model = ProjectSettingsModel(store: CatalogProjectSettingsStore(database: database))
+      model.load()
+      // The Include field's text, as the pane fills it for this source.
+      let shown = ProjectSource.defaultInclude.joined(separator: ", ")
+
+      model.updateSource(
+        label: "site", inProject: "blog", newLabel: "docs", include: shown, exclude: "")
+      model.updateSource(
+        label: "docs", inProject: "blog", newLabel: "docs", include: shown,
+        exclude: "drafts/**, **/*.{tmp,bak}")
+
+      #expect(model.saveError == nil)
+      #expect(
+        try CatalogConfiguration.projectSettings(slug: "blog", in: database).sources == [
+          ProjectSource(
+            label: "docs", path: "/Users/someone/site", include: [],
+            exclude: ["drafts/**", "**/*.{tmp,bak}"])
+        ])
+    }
+  }
+
   @Test("The snapshot resolves backend slugs and marks inherit as nil")
   func snapshotResolvesBackendSlugs() throws {
     try withSettingsDatabase { database in
