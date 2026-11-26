@@ -176,8 +176,9 @@ struct ProjectCommand: ParsableCommand {
     commandName: "project",
     abstract: "Manage upload projects.",
     subcommands: [
-      ProjectAdd.self, ProjectList.self, ProjectSet.self, ProjectSourceCommand.self,
-      ProjectLinkCommand.self, ProjectUnlinkCommand.self, ProjectMoveCommand.self,
+      ProjectAdd.self, ProjectList.self, ProjectShow.self, ProjectSet.self,
+      ProjectSourceCommand.self, ProjectLinkCommand.self, ProjectUnlinkCommand.self,
+      ProjectMoveCommand.self,
     ]
   )
 }
@@ -237,12 +238,7 @@ struct ProjectList: ParsableCommand {
     )
     let projects = try CatalogConfiguration.projects(in: database)
     if format == .json {
-      let records = projects.map { project in
-        ProjectJSON(
-          slug: project.slug, name: project.name, keyPrefix: project.keyPrefix,
-          keyTemplate: project.keyTemplate,
-          backend: project.backendID.flatMap { backendSlugs[$0] })
-      }
+      let records = try projectRecords(projects, backendSlugs: backendSlugs, in: database)
       return try encodedJSON(ProjectListDocument(projects: records)) + "\n"
     }
     return projects.map { project in
@@ -253,6 +249,70 @@ struct ProjectList: ParsableCommand {
   }
 }
 
+struct ProjectShow: ParsableCommand {
+  static let configuration = CommandConfiguration(commandName: "show")
+
+  @Argument var slug: String
+
+  @Option(name: .long)
+  var format: OutputFormat = .table
+
+  mutating func run() throws {
+    print(try output(in: openCatalogDatabase()), terminator: "")
+  }
+
+  /// Table: `key: value` lines, then one `source:` line per source with the
+  /// columns of `project source ls`.
+  func output(in database: CatalogDatabasePool) throws -> String {
+    let settings = try CatalogConfiguration.projectSettings(slug: slug, in: database)
+    guard
+      let project = try CatalogConfiguration.projects(in: database).first(where: {
+        $0.slug == slug
+      })
+    else { throw CatalogConfigurationError.projectNotFound(slug) }
+    let backendSlugs = Dictionary(
+      uniqueKeysWithValues: try CatalogConfiguration.backends(in: database).compactMap { backend in
+        backend.id.map { ($0, backend.slug) }
+      }
+    )
+    let record = try projectRecords([project], backendSlugs: backendSlugs, in: database)[0]
+    if format == .json {
+      return try encodedJSON(ProjectDocument(project: record)) + "\n"
+    }
+    let lines =
+      [
+        "slug: \(record.slug)",
+        "name: \(record.name)",
+        "key-prefix: \(record.keyPrefix)",
+        "key-template: \(record.keyTemplate ?? "default")",
+        "backend: \(record.backend ?? "-")",
+        "usage-tracking: \(record.usageTracking)",
+        "watch: \(settings.autoScan.watch ? "on" : "off")",
+        "schedule: \(settings.autoScan.schedule.rawValue)",
+        "assets: \(record.assets)",
+        "live-references: \(record.liveReferences)",
+        "last-scan-at: \(record.lastScanAt ?? "-")",
+      ] + settings.sources.map { "source: \(sourceRow($0))" }
+    return lines.joined(separator: "\n") + "\n"
+  }
+}
+
+/// The `project ls` / `show` JSON records: each project's own fields, its
+/// settings and its counts.
+private func projectRecords(
+  _ projects: [Project], backendSlugs: [Int64: String], in database: CatalogDatabasePool
+) throws -> [ProjectJSON] {
+  let summaries = Dictionary(
+    uniqueKeysWithValues: try CatalogConfiguration.projectSummaries(in: database).map {
+      ($0.slug, $0)
+    })
+  return projects.map { project in
+    ProjectJSON(
+      project, backend: project.backendID.flatMap { backendSlugs[$0] },
+      settings: ProjectSettings(meta: project.meta), summary: summaries[project.slug])
+  }
+}
+
 struct ProjectSet: ParsableCommand {
   static let configuration = CommandConfiguration(commandName: "set")
 
@@ -260,6 +320,10 @@ struct ProjectSet: ParsableCommand {
   @Option var name: String?
   @Option var keyPrefix: String?
   @Option var backend: String?
+  @Flag(help: "Remove the project's backend; uploads then use the only registered one.")
+  var noBackend = false
+  @Option(help: "Whether the project's usage is tracked: tracked or not-tracked.")
+  var usageTracking: UsageTrackingArgument?
   @Option(help: "Object key template; the default is \(KeyTemplate.defaultTemplate).")
   var keyTemplate: String?
   @Flag(help: "Go back to the default key template.")
@@ -283,6 +347,9 @@ struct ProjectSet: ParsableCommand {
     if keyTemplate != nil, resetKeyTemplate {
       throw ValidationError("Give --key-template or --reset-key-template, not both.")
     }
+    if backend != nil, noBackend {
+      throw ValidationError("Give --backend or --no-backend, not both.")
+    }
   }
 
   private var changesCompression: Bool {
@@ -304,11 +371,12 @@ struct ProjectSet: ParsableCommand {
   }
 
   func perform(in database: CatalogDatabasePool) throws -> (output: String, warnings: [String]) {
-    // Compression or automatic scanning alone is a change too; with nothing
-    // at all given, setProject reports that nothing changed. The project's
-    // own fields go first, so a refused change leaves the others as they were.
+    // Any other option alone is a change too; with nothing at all given,
+    // setProject reports that nothing changed. The project's own fields go
+    // first, so a refused change leaves the others as they were.
     var warnings: [String] = []
-    if changesProject || !(changesCompression || changesAutoScan) {
+    let changesOther = noBackend || usageTracking != nil || changesCompression || changesAutoScan
+    if changesProject || !changesOther {
       let change: KeyTemplateChange =
         resetKeyTemplate ? .reset : keyTemplate.map { .set($0) } ?? .unchanged
       let project = try CatalogConfiguration.setProject(
@@ -320,6 +388,12 @@ struct ProjectSet: ParsableCommand {
         in: database
       )
       warnings = keyTemplateWarnings(for: project)
+    }
+    if noBackend {
+      _ = try CatalogConfiguration.clearProjectBackend(slug: slug, in: database)
+    }
+    if let usageTracking {
+      try CatalogConfiguration.setUsageTracking(slug: slug, usageTracking.value, in: database)
     }
     if changesCompression {
       try CatalogConfiguration.setCompression(slug: slug, in: database) { compression in
@@ -365,6 +439,18 @@ enum QualityArgument: String, ExpressibleByArgument, CaseIterable {
 enum MetadataArgument: String, EnumerableFlag {
   case removeMetadata
   case keepMetadata
+}
+
+/// `--usage-tracking tracked|not-tracked`.
+enum UsageTrackingArgument: String, ExpressibleByArgument, CaseIterable {
+  case tracked
+  case notTracked = "not-tracked"
+
+  init(_ value: UsageTracking) {
+    self = value == .tracked ? .tracked : .notTracked
+  }
+
+  var value: UsageTracking { self == .tracked ? .tracked : .notTracked }
 }
 
 /// `--watch on|off`.

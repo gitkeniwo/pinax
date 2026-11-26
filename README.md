@@ -112,7 +112,15 @@ Configure a project:
 pinax project add --slug blog --name Blog --key-prefix blog --backend r2
 pinax project ls
 pinax project set --slug blog --name 'Main Blog'
+pinax project show blog
+pinax project set --slug blog --usage-tracking not-tracked
+pinax project set --slug blog --no-backend
+pinax project source set blog site --path ~/sites/blog
 ```
+
+`project source set` changes one source in place. A folder source takes `--path`,
+`--include`, `--exclude`, `--clear-include`, and `--clear-exclude`. A command source takes
+`--command` and `--in`.
 
 ## Upload images
 
@@ -197,7 +205,7 @@ pinax usage report --project blog --format json
 pinax externals --project blog
 ```
 
-List active, unpinned assets that have no live references:
+List active, unpinned assets that have no live references. Favorites are never listed:
 
 ```sh
 pinax orphans --project blog --min-scans 2

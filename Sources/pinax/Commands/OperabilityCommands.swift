@@ -106,7 +106,7 @@ enum RestoreCommandOperations {
     lines.append(
       "Projects whose source folders are not on this Mac: \(projects.count)"
         + (projects.isEmpty ? "" : " (\(projects.map(\.projectSlug).joined(separator: ", "))); "
-          + "use Locate… in Settings ▸ Projects or `pinax project source`"))
+          + "use Locate… in Settings ▸ Projects or `pinax project source set`"))
     return lines.joined(separator: "\n") + "\n"
   }
 }
