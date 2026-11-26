@@ -107,6 +107,17 @@ import Testing
     #expect(try await inventory().headObject(key: "a.txt").etag == nil)
   }
 
+  @Test("headObject is signed and asks for an uncompressed answer")
+  func headAsksForIdentity() async throws {
+    ReaderStub.script([ok()])
+    _ = try await inventory().headObject(key: "a.txt")
+    let request = try #require(ReaderStub.requests.first)
+    #expect(request.httpMethod == "HEAD")
+    #expect(request.value(forHTTPHeaderField: "Accept-Encoding") == "identity")
+    let authorization = try #require(request.value(forHTTPHeaderField: "Authorization"))
+    #expect(authorization.contains("SignedHeaders=host;x-amz-content-sha256;x-amz-date,"))
+  }
+
   @Test("A byte count other than Content-Length throws, and so does no Content-Length")
   func lengthMismatch() async throws {
     ReaderStub.script([ok(headers: ["Content-Length": "9"])])

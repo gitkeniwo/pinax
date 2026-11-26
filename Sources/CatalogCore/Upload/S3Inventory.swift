@@ -172,7 +172,10 @@ public struct S3ObjectInventory: ObjectInventory, ObjectReading {
     request.timeoutInterval = requestTimeout
     request.cachePolicy = .reloadIgnoringLocalCacheData
     request.setValue(Self.emptyPayloadHash, forHTTPHeaderField: "x-amz-content-sha256")
-    let signed = try signer.sign(request, payloadHash: Self.emptyPayloadHash)
+    var signed = try signer.sign(request, payloadHash: Self.emptyPayloadHash)
+    // As in `getObject`. Otherwise `URLSession` offers gzip, and a CDN may
+    // answer with a weak ETag and no length, as it would for a compressed body.
+    signed.setValue("identity", forHTTPHeaderField: "Accept-Encoding")
     let (data, response) = try await session.data(for: signed)
     let http = try httpResponse(response)
     guard (200..<300).contains(http.statusCode) else {
