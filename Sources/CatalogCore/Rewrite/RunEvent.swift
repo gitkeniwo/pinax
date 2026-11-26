@@ -28,6 +28,9 @@ public enum RunEvent: Equatable, Sendable {
   case verifyFailed(VerifyFailedEvent)
   case keyChanged(KeyChangedEvent)
   case migrationStopped(MigrationStoppedEvent)
+  // Optimizing objects in place
+  case optimizeSelected(OptimizeSelectedEvent)
+  case objectMeasured(ObjectMeasuredEvent)
 
   public var type: String {
     switch self {
@@ -54,14 +57,19 @@ public enum RunEvent: Equatable, Sendable {
     case .verifyFailed: return "verify_failed"
     case .keyChanged: return "key_changed"
     case .migrationStopped: return "migration_stopped"
+    case .optimizeSelected: return "optimize_selected"
+    case .objectMeasured: return "object_measured"
     }
   }
 
   public var level: RunLevel {
     switch self {
     case .runStarted, .filePlanned, .prefixChanged, .fileWritten, .rescanFinished,
-      .migrationStarted, .downloadFinished, .migrationPlanned, .uploadFinished, .assetReused:
+      .migrationStarted, .downloadFinished, .migrationPlanned, .uploadFinished, .assetReused,
+      .optimizeSelected:
       return .info
+    case let .objectMeasured(event):
+      return event.outcome.level
     case .downloadFailed, .keyChanged, .migrationStopped:
       return .warning
     case .uploadFailed, .verifyFailed:
@@ -200,9 +208,25 @@ public enum RunEvent: Equatable, Sendable {
       let tail = event.phase == "check" ? " checked" : ""
       return Parts(
         verb: "Stopped", detail: "after \(event.done) of \(plural(event.total, noun))\(tail)", detailSeparator: " ")
+    case let .optimizeSelected(event):
+      return Parts(
+        verb: "Selected", detail: "\(plural(event.images.count, "JPEG")), measuring \(event.sample)",
+        detailSeparator: " ")
+    case let .objectMeasured(event):
+      if event.outcome == .smaller, let after = event.bytesAfter {
+        return Parts(
+          verb: "Measured", object: event.key,
+          detail: "\(byteText(event.bytesBefore)) → \(byteText(after))")
+      }
+      let why = event.detail.map { "\(event.outcome.label) (\($0))" } ?? event.outcome.label
+      return Parts(verb: "Would leave", object: event.key, detail: why, detailSeparator: " — ")
     case let .runFinished(summary):
       var parts: Parts
-      if let migration = summary.migration {
+      if let report = summary.optimize {
+        parts = Parts(
+          verb: "Finished",
+          detail: "measured \(report.savings.measured) of \(plural(report.selection.images, "JPEG"))")
+      } else if let migration = summary.migration {
         if let stopped = migration.stoppedAfter {
           parts = Parts(verb: "Stopped", detail: "after \(plural(stopped, "image"))", detailSeparator: " ")
         } else if let uploaded = migration.uploaded {
@@ -264,6 +288,8 @@ public enum RunEvent: Equatable, Sendable {
     case "verify_failed": self = .verifyFailed(try decode(VerifyFailedEvent.self))
     case "key_changed": self = .keyChanged(try decode(KeyChangedEvent.self))
     case "migration_stopped": self = .migrationStopped(try decode(MigrationStoppedEvent.self))
+    case "optimize_selected": self = .optimizeSelected(try decode(OptimizeSelectedEvent.self))
+    case "object_measured": self = .objectMeasured(try decode(ObjectMeasuredEvent.self))
     default: throw RunLogError.unknownEventType(type)
     }
   }
@@ -304,6 +330,8 @@ public enum RunEvent: Equatable, Sendable {
       case let .verifyFailed(value): try value.encode(to: encoder)
       case let .keyChanged(value): try value.encode(to: encoder)
       case let .migrationStopped(value): try value.encode(to: encoder)
+      case let .optimizeSelected(value): try value.encode(to: encoder)
+      case let .objectMeasured(value): try value.encode(to: encoder)
       }
     }
   }
@@ -820,6 +848,8 @@ public struct RewriteRunSummary: Codable, Equatable, Sendable {
   public var changedFilesByRepo: [String: [String]]?
   /// Set on an `external_migrate` run.
   public var migration: ExternalMigrationSummary?
+  /// Set on an `optimize` run.
+  public var optimize: OptimizeReport?
 
   public init(
     files: Int = 0, edits: Int = 0, skippedEdits: [String: Int] = [:], protocolRelative: Int = 0,
@@ -843,7 +873,7 @@ public struct RewriteRunSummary: Codable, Equatable, Sendable {
   public static let notInGitKey = "null"
 
   enum CodingKeys: String, CodingKey {
-    case files, edits, verified, written, failed, errors, migration
+    case files, edits, verified, written, failed, errors, migration, optimize
     case skippedEdits = "skipped_edits"
     case protocolRelative = "protocol_relative"
     case skippedFiles = "skipped_files"

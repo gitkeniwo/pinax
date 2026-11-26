@@ -6,6 +6,8 @@ public enum RunKind: String, Codable, Equatable, Sendable {
   case rewrite
   case domainMigrate = "domain_migrate"
   case externalMigrate = "external_migrate"
+  /// Recompressing a backend's objects at the same keys.
+  case optimize
 }
 
 public enum RunState: String, Codable, Equatable, Sendable {

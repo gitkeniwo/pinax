@@ -100,6 +100,11 @@ enum CLIExit {
       case .noProjects: return notFound
       case .targetsNotVerified, .prefixMoved: return refused
       }
+    case let error as OptimizeError:
+      switch error {
+      case .noImages: return notFound
+      case .nothingRead: return remote
+      }
     case let error as ExternalMigrationError:
       switch error {
       case .noTargets: return usage

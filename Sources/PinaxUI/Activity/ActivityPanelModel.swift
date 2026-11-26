@@ -238,6 +238,9 @@ public final class ActivityPanelModel: ObservableObject {
     case .domainMigrate:
       label = "Domain move"
       subject = [(try? decoder.decode(RewriteRunParams.self, from: data))?.domain?.backend].compactMap { $0 }
+    case .optimize:
+      label = "Optimize"
+      subject = [(try? decoder.decode(OptimizeRunParams.self, from: data))?.backend].compactMap { $0 }
     }
     var seen = Set<String>()
     let unique = subject.filter { seen.insert($0).inserted }
@@ -290,6 +293,9 @@ public final class ActivityPanelModel: ObservableObject {
         ActivityTally(kind: .skipped, count: skipped),
         ActivityTally(kind: .failed, count: summary.failed ?? 0),
       ]
+    case .optimize:
+      // A measurement changes nothing, so it has nothing to count.
+      return []
     }
   }
 
@@ -345,14 +351,16 @@ public final class ActivityPanelModel: ObservableObject {
   /// what happens when you apply, or — applied — what was rewritten.
   static func section(of event: RunEvent, kind: RunKind, dryRun: Bool) -> String? {
     switch event {
-    case .runStarted, .migrationStarted, .runFinished, .migrationStopped:
+    case .runStarted, .migrationStarted, .runFinished, .migrationStopped, .optimizeSelected:
       return nil
+    case .objectMeasured:
+      return "Measured"
     case .downloadFinished, .downloadFailed:
       return "Downloaded and checked"
     case .sourceStatus, .targetVerified:
       switch kind {
       case .externalMigrate: return dryRun ? "Downloaded and checked" : "Uploaded"
-      case .rewrite, .domainMigrate: return "Checked"
+      case .rewrite, .domainMigrate, .optimize: return "Checked"
       }
     case .uploadFinished, .assetReused, .uploadFailed, .verifyFailed, .keyChanged:
       return "Uploaded"
@@ -572,6 +580,7 @@ public final class ActivityPanelModel: ObservableObject {
     switch kind {
     case .externalMigrate: return diff
     case .rewrite, .domainMigrate: return rewriteDiff
+    case .optimize: return nil
     }
   }
 
