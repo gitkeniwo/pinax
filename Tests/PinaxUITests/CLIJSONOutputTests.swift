@@ -86,21 +86,32 @@ import Testing
             WHERE slug = 'notes'
             """)
       }
-      expect(
-        try json(["project", "ls"], in: directory),
-        [
-          "schema": "pinax.projects.v1",
-          "projects": [
-            [
-              "slug": "blog", "name": "Blog", "key_prefix": "blog", "key_template": NSNull(),
-              "backend": "r2",
-            ] as [String: Any],
-            [
-              "slug": "notes", "name": "Notes", "key_prefix": "notes",
-              "key_template": "{sha256}.{ext}", "backend": NSNull(),
-            ] as [String: Any],
-          ],
-        ])
+      let listed = try json(["project", "ls"], in: directory)
+      #expect(listed["schema"] as? String == "pinax.projects.v1")
+      var projects = try #require(listed["projects"] as? [[String: Any]])
+      #expect(projects.count == 2)
+      #expect(projects[0]["last_scan_at"] is String)
+      projects[0]["last_scan_at"] = nil
+      let off: [String: Any] = ["watch": false, "schedule": "off"]
+      let site = directory.appendingPathComponent("site").path
+      #expect(
+        projects as NSArray == [
+          [
+            "slug": "blog", "name": "Blog", "key_prefix": "blog", "key_template": NSNull(),
+            "backend": "r2", "usage_tracking": "tracked", "auto_scan": off,
+            "sources": [
+              ["label": "site", "path": site, "include": [String](), "exclude": [String]()]
+                as [String: Any]
+            ],
+            "live_references": 4, "assets": 2,
+          ] as [String: Any],
+          [
+            "slug": "notes", "name": "Notes", "key_prefix": "notes",
+            "key_template": "{sha256}.{ext}", "backend": NSNull(),
+            "usage_tracking": "not-tracked", "auto_scan": off, "sources": [[String: Any]](),
+            "last_scan_at": NSNull(), "live_references": 0, "assets": 1,
+          ] as [String: Any],
+        ] as NSArray)
     }
   }
 

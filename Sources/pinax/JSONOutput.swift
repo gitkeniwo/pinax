@@ -187,7 +187,12 @@ struct NoteDocument: Encodable {
   }
 }
 
-// MARK: - pinax project ls
+// MARK: - pinax project ls, show
+
+struct ProjectDocument: Encodable {
+  let schema = "pinax.project.v1"
+  let project: ProjectJSON
+}
 
 struct ProjectListDocument: Encodable {
   let schema = "pinax.projects.v1"
@@ -202,12 +207,45 @@ struct ProjectJSON: Encodable {
   @ExplicitNull var keyTemplate: String?
   /// The backend's slug.
   @ExplicitNull var backend: String?
+  /// `tracked` or `not-tracked`, as `--usage-tracking` takes it.
+  let usageTracking: String
+  let autoScan: AutoScanJSON
+  /// Each as `project source ls --format json` prints it.
+  let sources: [ProjectSource]
+  @ExplicitNull var lastScanAt: String?
+  let liveReferences: Int
+  /// Active assets.
+  let assets: Int
+
+  init(_ project: Project, backend: String?, settings: ProjectSettings, summary: ProjectSummary?) {
+    slug = project.slug
+    name = project.name
+    keyPrefix = project.keyPrefix
+    keyTemplate = project.keyTemplate
+    self.backend = backend
+    usageTracking = UsageTrackingArgument(settings.usageTracking).rawValue
+    autoScan = AutoScanJSON(
+      watch: settings.autoScan.watch, schedule: settings.autoScan.schedule.rawValue)
+    sources = settings.sources
+    lastScanAt = summary?.lastScanAt
+    liveReferences = summary?.liveUsageCount ?? 0
+    assets = summary?.assetCount ?? 0
+  }
 
   enum CodingKeys: String, CodingKey {
-    case slug, name, backend
+    case slug, name, backend, sources, assets
     case keyPrefix = "key_prefix"
     case keyTemplate = "key_template"
+    case usageTracking = "usage_tracking"
+    case autoScan = "auto_scan"
+    case lastScanAt = "last_scan_at"
+    case liveReferences = "live_references"
   }
+}
+
+struct AutoScanJSON: Encodable {
+  let watch: Bool
+  let schedule: String
 }
 
 // MARK: - pinax backend ls, show

@@ -214,7 +214,7 @@ public struct CatalogStats: Equatable, Sendable {
     counts.usedInScope = usedInScope.count
     counts.used = usedBy.filter { scoped.contains($0.key) }.mapValues(\.count)
 
-    // Orphans: active, unpinned, unused — by any project for All, by the
+    // Orphans: active, unpinned, not a favorite, unused — by any project for All, by the
     // project itself when one is current — less the assets whose every
     // project is not tracked.
     var memberships: [Int64: [Int64]] = [:]
@@ -222,7 +222,8 @@ public struct CatalogStats: Equatable, Sendable {
       memberships[row["asset_id"], default: []].append(row["project_id"])
     }
     for row in try Row.fetchAll(
-      db, sql: "SELECT id, byte_size FROM asset WHERE state = 'active' AND pinned = 0")
+      db,
+      sql: "SELECT id, byte_size FROM asset WHERE state = 'active' AND pinned = 0 AND favorite = 0")
     {
       let assetID: Int64 = row["id"]
       let bytes: Int64 = row["byte_size"]

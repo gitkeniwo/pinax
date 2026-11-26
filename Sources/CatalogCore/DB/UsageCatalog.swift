@@ -511,7 +511,7 @@ public enum CatalogUsage {
           SELECT DISTINCT a.*
           FROM asset a
           JOIN asset_project ap ON ap.asset_id = a.id
-          WHERE a.state = 'active' AND a.pinned = 0 AND ap.project_id = ?
+          WHERE a.state = 'active' AND a.pinned = 0 AND a.favorite = 0 AND ap.project_id = ?
             AND NOT EXISTS (
               SELECT 1 FROM asset_live_usage l
               WHERE l.asset_id = a.id AND l.project_id = ?
@@ -526,7 +526,7 @@ public enum CatalogUsage {
         sql: """
           SELECT a.*
           FROM asset a
-          WHERE a.state = 'active' AND a.pinned = 0
+          WHERE a.state = 'active' AND a.pinned = 0 AND a.favorite = 0
             AND NOT EXISTS (
               SELECT 1 FROM asset_live_usage l
               WHERE l.asset_id = a.id

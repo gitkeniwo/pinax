@@ -28,7 +28,10 @@ import Testing
     #expect(output.contains("asset\t3\n"))
     #expect(output.contains("project\t2\n"))
     #expect(output.contains("Backends without credentials on this Mac: 1 (b2)"))
-    #expect(output.contains("Projects whose source folders are not on this Mac: 1 (notes)"))
+    #expect(
+      output.contains(
+        "Projects whose source folders are not on this Mac: 1 (notes); "
+          + "use Locate… in Settings ▸ Projects or `pinax project source set`\n"))
     #expect(lookedUp.sorted() == ["backend.b2", "backend.r2"])
 
     // A second restore into the now-filled catalog is refused, unchanged.
