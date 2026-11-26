@@ -50,7 +50,8 @@ enum S3Retry {
 public struct S3Uploader: Uploader {
   public static let immutableCacheControl = "public, max-age=31536000, immutable"
 
-  private static let allowedMetadata = Set([
+  /// Every `x-amz-meta-*` header Pinax writes.
+  static let allowedMetadata = Set([
     "x-amz-meta-sha256",
     "x-amz-meta-orig-filename",
     "x-amz-meta-width",
