@@ -94,6 +94,11 @@ enum CLIExit {
       }
     case is PublicObjectFetchError, is URLError:
       return remote
+    case let error as OriginalDownloadError:
+      switch error {
+      case .fetch, .checksumMismatch: return remote
+      case .invalidURL: return nil
+      }
     case let error as RewriteRunError:
       switch error {
       case .runNotFound, .unknownSources: return notFound

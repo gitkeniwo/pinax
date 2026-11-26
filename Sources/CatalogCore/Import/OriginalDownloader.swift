@@ -1,4 +1,3 @@
-import CatalogCore
 import Foundation
 
 /// One original to save — the catalog's sha256 for it,
@@ -44,6 +43,16 @@ public struct OriginalDownloader: Sendable {
   public static var defaultFolder: URL {
     FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
       ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Downloads")
+  }
+
+  /// The original filename as a single path component; a name that is not
+  /// one (empty, or all separators) falls back to the key's last component.
+  public static func downloadFilename(_ filename: String, key: String) -> String {
+    let component = (filename as NSString).lastPathComponent
+    if component.isEmpty || component == "/" || component == "." || component == ".." {
+      return (key as NSString).lastPathComponent
+    }
+    return component
   }
 
   /// The first of `name.ext`, `name 2.ext`, `name 3.ext`, … not present in

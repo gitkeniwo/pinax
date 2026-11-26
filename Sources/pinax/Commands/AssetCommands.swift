@@ -155,7 +155,13 @@ struct AssetListCommand: ParsableCommand {
   var after: String?
 
   @Option(name: .long)
-  var format: AssetListFormat = .table
+  var format: AssetListFormat?
+
+  @OptionGroup var copy: CopyTemplateOption
+
+  func validate() throws {
+    try copy.validate(hasFormat: format != nil)
+  }
 
   mutating func run() throws {
     var query = try query()
@@ -164,7 +170,13 @@ struct AssetListCommand: ParsableCommand {
       query.backendID = try CatalogConfiguration.backend(slug: backend, in: database).id
     }
     let page = try CatalogAssets.page(query, in: database)
-    switch format {
+    if let template = copy.template {
+      for line in try templateLines(template, for: page.items, in: database) {
+        print(line)
+      }
+      return
+    }
+    switch format ?? .table {
     case .url:
       for item in page.items {
         print(item.url)
@@ -295,18 +307,59 @@ struct ListedAssetJSON: Encodable {
   }
 }
 
+/// `url --format`: the link forms `upload --format` prints.
+enum AssetURLFormat: String, ExpressibleByArgument {
+  case url
+  case markdown
+  case html
+
+  var coreFormat: UploadOutputFormat {
+    UploadOutputFormat(rawValue: rawValue)!
+  }
+}
+
 struct AssetURLCommand: ParsableCommand {
   static let configuration = CommandConfiguration(
     commandName: "url",
-    abstract: "Print an asset URL."
+    abstract: "Print asset URLs."
   )
 
-  @Argument
-  var identifier: String
+  @Argument(help: "Exact asset keys or unambiguous SHA-256 prefixes.")
+  var identifiers: [String]
+
+  @Option(name: .long, help: "How to print each link; url by default.")
+  var format: AssetURLFormat?
+
+  @OptionGroup var copy: CopyTemplateOption
+
+  func validate() throws {
+    try copy.validate(hasFormat: format != nil)
+  }
 
   mutating func run() throws {
-    let item = try CatalogAssets.resolve(identifier, in: openCatalogDatabase())
-    print(item.url)
+    print(try output(in: openCatalogDatabase()))
+  }
+
+  /// One line per asset, in the order named. Nothing is printed unless every
+  /// identifier resolves.
+  func output(in database: CatalogDatabasePool) throws -> String {
+    let items = try CatalogAssets.resolveAll(identifiers, in: database)
+    if let template = copy.template {
+      return try templateLines(template, for: items, in: database).joined(separator: "\n")
+    }
+    return try UploadOutput.format(
+      items.map(UploadOutcome.init(catalogued:)), as: (format ?? .url).coreFormat)
+  }
+}
+
+extension UploadOutcome {
+  /// A catalogued asset as the link formatter takes it.
+  init(catalogued item: CatalogAssetItem) {
+    self.init(
+      sha256: item.asset.sha256, key: item.asset.key, url: item.url, mime: item.asset.mime,
+      originalFilename: item.asset.originalFilename ?? item.asset.key,
+      byteSize: item.asset.byteSize, width: item.asset.width, height: item.asset.height,
+      uploadedAt: item.asset.uploadedAt, deduplicated: false, dryRun: false)
   }
 }
 

@@ -107,8 +107,8 @@ import Testing
 
   @Test("A filename with separators saves as one path component inside the folder")
   func filenameStaysInFolder() {
-    #expect(GalleryModel.downloadFilename("../../etc/shot.png", key: "blog/k.png") == "shot.png")
-    #expect(GalleryModel.downloadFilename("", key: "blog/k.png") == "k.png")
+    #expect(OriginalDownloader.downloadFilename("../../etc/shot.png", key: "blog/k.png") == "shot.png")
+    #expect(OriginalDownloader.downloadFilename("", key: "blog/k.png") == "k.png")
   }
 
   // MARK: - property 3

@@ -1918,7 +1918,8 @@ public final class GalleryModel: ObservableObject {
         request: URL(string: member.url).map {
           DownloadRequest(
             sha256: member.identifier, sourceURL: $0,
-            filename: Self.downloadFilename(member.copyFields.filename, key: member.copyFields.key))
+            filename: OriginalDownloader.downloadFilename(
+              member.copyFields.filename, key: member.copyFields.key))
         }
       )
     }
@@ -2004,16 +2005,6 @@ public final class GalleryModel: ObservableObject {
     let folder = shareCacheFolder.appendingPathComponent(member.identifier, isDirectory: true)
     let names = (try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []
     return names.sorted().first.map { folder.appendingPathComponent($0) }
-  }
-
-  /// The original filename as a single path component; a name that is not
-  /// one (empty, or all separators) falls back to the key's last component.
-  static func downloadFilename(_ filename: String, key: String) -> String {
-    let component = (filename as NSString).lastPathComponent
-    if component.isEmpty || component == "/" || component == "." || component == ".." {
-      return (key as NSString).lastPathComponent
-    }
-    return component
   }
 
   // MARK: - Archive, favourite, labels
@@ -2802,12 +2793,7 @@ public final class GalleryModel: ObservableObject {
       url: row.item.url,
       note: contextMenuMetadata[identifier]?.note ?? row.item.asset.note,
       copyFields: CopyFields(
-        url: row.item.url,
-        filename: row.item.asset.originalFilename
-          ?? (row.item.asset.key as NSString).lastPathComponent,
-        width: row.item.asset.width,
-        height: row.item.asset.height,
-        key: row.item.asset.key,
+        item: row.item,
         projects: (contextMenuMetadata[identifier]?.memberSlugs).map { $0.sorted() } ?? []),
       isFavorite: row.isFavorite,
       labels: row.labels,

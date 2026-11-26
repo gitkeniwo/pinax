@@ -132,6 +132,78 @@ public enum CatalogAssets {
     }
   }
 
+  /// The assets the identifiers name, in order, each once. When one of
+  /// several does not resolve, the error lists every one that did not; for
+  /// a single identifier it is the error `resolve` throws.
+  public static func resolveAll(_ identifiers: [String], in database: DatabasePool) throws
+    -> [CatalogAssetItem]
+  {
+    do {
+      return try database.read { db in
+        try catalogItems(for: resolveAll(identifiers, db: db), in: db)
+      }
+    } catch let error as AssetCatalogError where identifiers.count == 1 {
+      throw error.forOneAsset
+    }
+  }
+
+  /// The slugs of the projects each asset is a member of; an asset in none
+  /// has no entry.
+  public static func projectMemberships(assetIDs: [Int64], in database: DatabasePool) throws
+    -> [Int64: Set<String>]
+  {
+    try database.read { db in
+      try projectMemberships(assetIDs: assetIDs, in: db)
+    }
+  }
+
+  public static func projectMemberships(assetIDs: [Int64], in database: DatabasePool)
+    async throws -> [Int64: Set<String>]
+  {
+    try await database.read { db in
+      try projectMemberships(assetIDs: assetIDs, in: db)
+    }
+  }
+
+  /// The same for the one asset a backend stores under `sha256`; empty when
+  /// there is none.
+  public static func projectSlugs(
+    sha256: String, backendID: Int64?, in database: DatabasePool
+  ) throws -> Set<String> {
+    try database.read { db in
+      guard
+        let id = try Asset
+          .filter(Column("backend_id") == backendID && Column("sha256") == sha256)
+          .fetchOne(db)?.id
+      else { return [] }
+      return try projectMemberships(assetIDs: [id], in: db)[id] ?? []
+    }
+  }
+
+  private static func projectMemberships(assetIDs: [Int64], in db: GRDB.Database) throws
+    -> [Int64: Set<String>]
+  {
+    guard !assetIDs.isEmpty else { return [:] }
+    let placeholders = Array(repeating: "?", count: assetIDs.count).joined(separator: ",")
+    let rows = try Row.fetchAll(
+      db,
+      sql: """
+        SELECT ap.asset_id, p.slug
+        FROM asset_project ap
+        JOIN project p ON p.id = ap.project_id
+        WHERE ap.asset_id IN (\(placeholders))
+        """,
+      arguments: StatementArguments(assetIDs)
+    )
+    var result: [Int64: Set<String>] = [:]
+    for row in rows {
+      let assetID: Int64 = row["asset_id"]
+      let slug: String = row["slug"]
+      result[assetID, default: []].insert(slug)
+    }
+    return result
+  }
+
   static func resolve(_ identifier: String, in db: GRDB.Database) throws -> CatalogAssetItem {
     guard let asset = try resolveInWrite(identifier, db: db),
       let backend = try Backend.fetchOne(db, key: asset.backendID)

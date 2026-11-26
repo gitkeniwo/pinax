@@ -20,29 +20,7 @@ import Testing
     url: "https://img.example.com/blog/a.png", filename: "Screen Shot.v2.png",
     width: 800, height: 600, key: "blog/a.png", projects: ["blog", "notes"])
 
-  // MARK: - property 1
-
-  @Test("Each placeholder renders its own field", arguments: [
-    ("{url}", "https://img.example.com/blog/a.png"),
-    ("{filename}", "Screen Shot.v2.png"),
-    ("{name}", "Screen Shot.v2"),
-    ("{width}", "800"),
-    ("{height}", "600"),
-    ("{key}", "blog/a.png"),
-    ("{project}", "blog, notes"),
-  ])
-  func placeholder(template: String, expected: String) {
-    #expect(CopyTemplate.render("<" + template + ">", fields: fields) == "<" + expected + ">")
-  }
-
-  @Test("Missing dimensions and projects render empty")
-  func missingValues() {
-    var bare = fields
-    bare.width = nil
-    bare.height = nil
-    bare.projects = []
-    #expect(CopyTemplate.render("{width}x{height}|{project}|", fields: bare) == "x||")
-  }
+  // MARK: - property 1 (the placeholders themselves: `CopyTemplateTests`)
 
   @Test("Factory templates render the spec's lines")
   func factoryTemplates() {
@@ -57,14 +35,11 @@ import Testing
 
   // MARK: - property 2
 
-  @Test("Unknown placeholders stay as written and are reported")
-  func unknownPlaceholders() {
-    let template = "{url} {URL} {nmae} {} {url"
-    #expect(
-      CopyTemplate.render(template, fields: fields)
-        == "https://img.example.com/blog/a.png {URL} {nmae} {} {url")
-    #expect(CopyTemplate.unknownPlaceholders(in: template) == ["{URL}", "{nmae}"])
-    #expect(CopyTemplate.unknownPlaceholders(in: CopyFormat.html.template).isEmpty)
+  @Test("The factory templates name only known placeholders")
+  func factoryPlaceholders() {
+    for format in CopyFormat.factory {
+      #expect(CopyTemplate.unknownPlaceholders(in: format.template).isEmpty, "\(format.name)")
+    }
   }
 
   // MARK: - property 3
