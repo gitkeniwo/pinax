@@ -2,7 +2,7 @@ import ArgumentParser
 import CatalogCore
 import Foundation
 
-// The `--format json` documents of the read commands, and what they share.
+// The `--format json` documents of the commands, and what they share.
 // Each document carries a `schema` string, `pinax.<name>.v1`; keys are
 // snake_case; a missing value is `null`, never an absent key. Standard output
 // holds the document only.
@@ -122,6 +122,53 @@ struct ProjectUsageJSON: Encodable {
   enum CodingKeys: String, CodingKey {
     case slug, name
     case liveUsage = "live_usage"
+  }
+}
+
+// MARK: - pinax archive, unarchive, favorite, label, project link, unlink, move
+
+/// Each asset the command resolved, before and after; the two are equal when
+/// it was already there. In a dry run `after` is what would be written.
+struct CurationDocument: Encodable {
+  let schema = "pinax.curation.v1"
+  let action: String
+  let dryRun: Bool
+  let assets: [CurationAssetJSON]
+
+  init(action: String, dryRun: Bool, changes: [CurationChange]) {
+    self.action = action
+    self.dryRun = dryRun
+    assets = changes.map {
+      CurationAssetJSON(
+        sha256: $0.sha256, key: $0.key, before: CurationStateJSON($0.before),
+        after: CurationStateJSON($0.after))
+    }
+  }
+
+  enum CodingKeys: String, CodingKey {
+    case schema, action, assets
+    case dryRun = "dry_run"
+  }
+}
+
+struct CurationAssetJSON: Encodable {
+  let sha256: String
+  let key: String
+  let before: CurationStateJSON
+  let after: CurationStateJSON
+}
+
+struct CurationStateJSON: Encodable {
+  let state: String
+  let favorite: Bool
+  let labels: [String]
+  let projects: [String]
+
+  init(_ state: CurationState) {
+    self.state = state.state
+    favorite = state.favorite
+    labels = state.labels.map(\.rawValue)
+    projects = state.projects
   }
 }
 
