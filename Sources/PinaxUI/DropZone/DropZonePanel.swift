@@ -9,11 +9,9 @@ import SwiftUI
 final class DropZonePanel: NSPanel {
   static let defaultSize = DropZoneSize.defaultSize
 
-  /// Nothing on a card needs keyboard focus today, so this stays false while
-  /// a drag is live. When a card grows an editable field (rename, note), flip
-  /// it on interaction — a constant `false` would make that field silently
-  /// uneditable, because the panel must not take key focus from the app the
-  /// user is dragging out of.
+  /// False while unattended: the panel must not take key focus from the app
+  /// the user is dragging out of. On only while a review waits, so Esc and
+  /// Return reach its Cancel and Upload.
   var allowsBecomingKey = false
 
   init(contentView: NSView, size: CGSize) {
@@ -69,6 +67,9 @@ public final class DropZoneController: ObservableObject {
   /// on, a drag that crosses between displays re-places the zone onto the
   /// display the cursor is now on.
   private var placedScreenID: CGDirectDisplayID?
+  /// A review was waiting on screen at the last look: the panel took key
+  /// once, as it began.
+  private var wasReviewing = false
 
   /// Test seam: how many times placement was recomputed from live screen
   /// geometry. The property is that the panel re-places itself after a
@@ -160,8 +161,14 @@ public final class DropZoneController: ObservableObject {
           panel.orderFrontRegardless()
         }
       }
+      let reviewing = model.isReviewing
+      panel.allowsBecomingKey = reviewing
+      if reviewing, !wasReviewing { panel.makeKey() }
+      wasReviewing = reviewing
     } else {
       panel?.orderOut(nil)
+      panel?.allowsBecomingKey = false
+      wasReviewing = false
       placedScreenID = nil
     }
   }

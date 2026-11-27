@@ -10,7 +10,7 @@ import SwiftUI
 /// label, the List's words, the Shelf's one word, and its tooltip.
 struct DropZoneCardStatus: Equatable {
   enum Kind: Equatable {
-    case waiting, compressing, uploading, uploaded, inLibrary, failed
+    case waiting, compressing, uploading, review, uploaded, inLibrary, failed
 
     /// Not landed yet: the picture is dimmed inside a ring.
     var isPending: Bool { self == .waiting || self == .compressing || self == .uploading }
@@ -37,6 +37,100 @@ struct DropZoneCardStatus: Equatable {
   /// "Just now" alone, and what follows it; set together, or not at all.
   private(set) var when: String?
   private(set) var savings: Savings?
+  /// A card held for review: what each choice sends.
+  private(set) var review: Review?
+
+  /// A reviewed card's words: the copy's sizes while its switch is on, the
+  /// original's (and the copy's, set back) while it is off, or why there is
+  /// no copy.
+  struct Review: Equatable {
+    /// The switch is on.
+    let compresses: Bool
+    let canCompress: Bool
+    /// "4.6 MB → 336 kB", "640 kB", or "Original · not smaller".
+    let lead: String
+    /// "→ 188 kB": the copy that will not be sent, drawn stepped back.
+    let unsent: String?
+    let percent: String?
+    let isSaving: Bool
+    let formatChange: String?
+    /// The Shelf's lead: "336 kB", "640 kB", or "Not smaller".
+    let shelfLead: String
+    /// The List's meta line: "6000 × 4000 → 2048 × 1365", "1920 × 480", or
+    /// "2880 × 1800 · 412 kB".
+    let meta: String
+    /// Everything, for the Shelf's tooltip.
+    let help: String
+
+    init(prepared: PreparedDrop, useOriginal: Bool) {
+      let sourceSize = prepared.sourceByteSize.map(PinaxFormat.fileSize)
+      let sourceDimensions = PinaxFormat.dimensions(
+        width: prepared.sourceWidth, height: prepared.sourceHeight)
+      guard let copy = prepared.compression else {
+        compresses = false
+        canCompress = false
+        let reason = prepared.originalReason ?? .notSmaller
+        lead = Self.note(reason)
+        shelfLead = Self.shortNote(reason)
+        unsent = nil
+        percent = nil
+        isSaving = false
+        formatChange = nil
+        meta = [sourceDimensions, sourceSize].compactMap(\.self).joined(separator: " · ")
+        help = meta
+        return
+      }
+      compresses = !useOriginal
+      canCompress = true
+      percent = compresses ? copy.percentChange : nil
+      isSaving = copy.isSmaller
+      formatChange = compresses ? copy.formatChange : nil
+      let copySize = PinaxFormat.fileSize(copy.byteSize)
+      let original = sourceSize ?? PinaxFormat.fileSize(copy.sourceByteSize)
+      let copyDimensions = PinaxFormat.dimensions(width: copy.width, height: copy.height)
+      if compresses {
+        lead = copy.sizeChange
+        unsent = nil
+        shelfLead = copySize
+        meta =
+          sourceDimensions != nil && copyDimensions != nil && sourceDimensions != copyDimensions
+          ? "\(sourceDimensions!) → \(copyDimensions!)" : (copyDimensions ?? sourceDimensions ?? "")
+      } else {
+        lead = original
+        unsent = "→ \(copySize)"
+        shelfLead = original
+        meta = sourceDimensions ?? ""
+      }
+      help = [copy.sizeChange, copyDimensions, copy.formatChange].compactMap(\.self)
+        .joined(separator: " · ")
+    }
+
+    static func note(_ reason: PreparedDrop.OriginalReason) -> String {
+      switch reason {
+      case .notSmaller: "Original · not smaller"
+      case .notCompressible: "Original · not compressible"
+      case .inLibrary: "Already in library"
+      }
+    }
+
+    static func shortNote(_ reason: PreparedDrop.OriginalReason) -> String {
+      switch reason {
+      case .notSmaller: "Not smaller"
+      case .notCompressible: "Original"
+      case .inLibrary: "In library"
+      }
+    }
+
+    var listText: String {
+      [[lead, unsent].compactMap(\.self).joined(separator: " "), percent, formatChange]
+        .compactMap(\.self).joined(separator: " · ")
+    }
+
+    var shelfText: String {
+      [[shelfLead, unsent].compactMap(\.self).joined(separator: " "), percent]
+        .compactMap(\.self).joined(separator: " · ")
+    }
+  }
 
   init(card: DropZoneModel.UploadCard, now: Date = Date()) {
     switch card.phase {
@@ -46,6 +140,13 @@ struct DropZoneCardStatus: Equatable {
       self.init(.compressing, "Compressing", "Compressing…", "Compressing", nil)
     case .uploading:
       self.init(.uploading, "Uploading", "Uploading…", "Uploading", nil)
+    case .review(let useOriginal):
+      let review = Review(
+        prepared: card.prepared ?? PreparedDrop(fileURL: card.fileURL, projectSlug: card.projectSlug),
+        useOriginal: useOriginal)
+      self.init(.review, "Ready to upload", review.listText, review.shelfText, nil)
+      self.review = review
+      shelfHelp = review.help
     case .done(let outcome) where outcome.deduplicated:
       self.init(
         .inLibrary, "Already in library", "Already in library", "In library",
@@ -160,8 +261,13 @@ func dropZoneProjectName(_ slug: String?, in projects: [Project]) -> String {
 }
 
 extension DropZoneCardStatus {
-  /// `listText` as drawn: a saving's percentage in its own hue, semibold.
-  func listWords(saving: Color) -> Text {
+  /// `listText` as drawn: a saving's percentage in its own hue, semibold;
+  /// a copy that will not be sent in `unsent`.
+  func listWords(saving: Color, unsent: Color = .secondary) -> Text {
+    if let review {
+      return Self.reviewWords(
+        review, lead: review.lead, saving: saving, unsent: unsent, format: true)
+    }
     guard let when, let savings else { return Text(listText) }
     var words = Text(when)
     if let percent = savings.percent {
@@ -175,10 +281,30 @@ extension DropZoneCardStatus {
 
   /// The Shelf's word as drawn: `shelfText`, or with `short` only the
   /// percentage, for a cell too narrow for both.
-  func shelfWords(saving: Color, short: Bool = false) -> Text {
+  func shelfWords(saving: Color, unsent: Color = .secondary, short: Bool = false) -> Text {
+    if let review {
+      return Self.reviewWords(
+        review, lead: review.shelfLead, saving: saving, unsent: unsent, format: false)
+    }
     guard let when, let savings, let percent = savings.percent else { return Text(shelfText) }
     let word = Self.percentWord(percent, savings.isSaving, saving)
     return short ? word : Text("\(when) · \(word)")
+  }
+
+  private static func reviewWords(
+    _ review: Review, lead: String, saving: Color, unsent: Color, format: Bool
+  ) -> Text {
+    var words = Text(lead)
+    if let copy = review.unsent {
+      words = Text("\(words) \(Text(copy).foregroundStyle(unsent))")
+    }
+    if let percent = review.percent {
+      words = Text("\(words) · \(percentWord(percent, review.isSaving, saving))")
+    }
+    if format, let formatChange = review.formatChange {
+      words = Text("\(words) · \(formatChange)")
+    }
+    return words
   }
 
   private static func percentWord(_ percent: String, _ isSaving: Bool, _ hue: Color) -> Text {
@@ -263,7 +389,7 @@ struct StatusThumbnail: View {
     case .waiting, .compressing, .uploading: M.ringReach
     case .inLibrary: M.statusOutset
     case .uploaded: ringFinished || card.landedAt == nil ? 0 : M.ringReach
-    case .failed: 0
+    case .review, .failed: 0
     }
   }
 
@@ -788,6 +914,13 @@ struct ResultCardView: View {
         .help(retryAction.help)
       }
       .lineLimit(1)
+    } else if status.kind == .review {
+      status.listWords(saving: palette.done, unsent: palette.tertiary)
+        .foregroundStyle(palette.secondary)
+        .pinaxSecondary()
+        .monospacedDigit()
+        .lineLimit(1)
+        .help(status.listText)
     } else if status.kind == .uploaded {
       TimelineView(.periodic(from: .now, by: 30)) { context in
         DropZoneCardStatus(card: card, now: context.date).listWords(saving: palette.done)
@@ -837,6 +970,7 @@ struct ResultCardView: View {
   /// after for a recompressed copy; while that copy uploads, before → after
   /// alone; otherwise nothing.
   var metaText: String {
+    if card.phase.isReview { return status.review?.meta ?? "" }
     if card.phase == .uploading { return card.compression?.sizeChange ?? "" }
     guard case .done(let outcome) = card.phase else { return "" }
     var parts: [String] = []
@@ -891,12 +1025,19 @@ struct ResultCardView: View {
   /// in every phase, so the row never appears or disappears under the
   /// pointer), and the project token at its end — the one move control on
   /// the card besides the context menu.
+  /// In review the switch takes the buttons' place: there is no link yet.
   private var actionRow: some View {
     HStack(spacing: M.iconButtonGap) {
-      ForEach(actions) { action in
-        actionButton(action)
-          .disabled(!isDone)
-          .dropZoneLayout(.action(action.id), card: card.id)
+      if model.reviewBatch.contains(card.id) {
+        DropZoneReviewSwitch(card: card, model: model)
+          .padding(.leading, M.actionRowLead)
+          .frame(height: M.iconButtonHeight)
+      } else {
+        ForEach(actions) { action in
+          actionButton(action)
+            .disabled(!isDone)
+            .dropZoneLayout(.action(action.id), card: card.id)
+        }
       }
       Spacer(minLength: M.iconButtonGap)
       DropZoneProjectToken(card: card, model: model, canMove: isDone)

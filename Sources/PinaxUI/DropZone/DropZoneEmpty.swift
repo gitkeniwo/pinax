@@ -44,12 +44,17 @@ struct DropZoneDragOverlay: View {
   /// The drag's files, as `DragMonitor` already read them.
   let fileURLs: [URL]
   let projectName: String?
+  /// A drop now is held for review (⇧ is down, or Always review is on).
+  var reviews = false
   @Environment(\.colorScheme) private var colorScheme
 
   private var palette: DropZonePalette { .of(colorScheme) }
   private typealias M = DesignMetrics.dropZone
 
   static let title = "Drop to upload"
+  static let reviewTitle = "Drop to review"
+
+  var title: String { reviews ? Self.reviewTitle : Self.title }
 
   /// "3 images into Blog"; no project says so. A drag the monitor did not
   /// see (none read yet) has no count to give.
@@ -67,7 +72,7 @@ struct DropZoneDragOverlay: View {
     VStack(spacing: M.illustrationGap) {
       DragPhotoStack(fileURLs: fileURLs, accent: palette.accent, placeholder: palette.paper)
       VStack(spacing: M.textSpacing) {
-        Text(Self.title)
+        Text(title)
           .pinaxTitle()
           .fontWeight(.bold)
           .foregroundStyle(palette.primary)
@@ -78,7 +83,7 @@ struct DropZoneDragOverlay: View {
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity)
     .accessibilityElement(children: .ignore)
-    .accessibilityLabel("\(Self.title), \(subtitle)")
+    .accessibilityLabel("\(title), \(subtitle)")
   }
 }
 

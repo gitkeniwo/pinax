@@ -579,6 +579,7 @@ public final class PinaxAppModel: ObservableObject {
       preferences.dropZoneRequiresModifier ? preferences.dropZoneModifier : nil
     zoneModel.autoHidesResultsAfter = TimeInterval(preferences.dropZoneAutoHideSeconds)
     zoneModel.copiesURLsAutomatically = preferences.copiesURLsOnUpload
+    zoneModel.alwaysReviews = preferences.dropZoneAlwaysReviews
   }
 
   // MARK: - Shell actions (menu commands and the menu bar)

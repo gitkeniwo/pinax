@@ -34,14 +34,24 @@ public final class DropZoneModel: ObservableObject {
       /// its project asks, recompressed.
       case compressing
       case uploading
+      /// Prepared and held for the user's say: sent with Upload, as the
+      /// copy unless `useOriginal`.
+      case review(useOriginal: Bool)
       case done(UploadOutcome)
       case failed(String)
 
+      /// Under way: the progress counts it and the countdown waits. A card
+      /// in review is not; it waits for the user instead.
       public var isPending: Bool {
         switch self {
         case .waiting, .compressing, .uploading: return true
-        case .done, .failed: return false
+        case .review, .done, .failed: return false
         }
+      }
+
+      public var isReview: Bool {
+        if case .review = self { return true }
+        return false
       }
     }
 
@@ -60,6 +70,8 @@ public final class DropZoneModel: ObservableObject {
     public var landedAt: Date?
     /// Set once a recompressed copy exists, and kept with what was stored.
     public var compression: CardCompression?
+    /// A reviewed card's prepared file, held until Upload sends it.
+    public var prepared: PreparedDrop?
     /// The catalog row behind a card that Show Drop Zone brought up from the
     /// catalog; nil for a card dropped in this run.
     public let catalogItem: CatalogAssetItem?
@@ -76,7 +88,8 @@ public final class DropZoneModel: ObservableObject {
     /// A card made up whole, phase and all: the settings preview's samples.
     init(
       filename: String, fileURL: URL, phase: Phase, thumbnail: CGImage?,
-      landedAt: Date? = nil, projectSlug: String?, compression: CardCompression? = nil
+      landedAt: Date? = nil, projectSlug: String?, compression: CardCompression? = nil,
+      prepared: PreparedDrop? = nil
     ) {
       self.id = UUID()
       self.fileURL = fileURL
@@ -86,8 +99,12 @@ public final class DropZoneModel: ObservableObject {
       self.landedAt = landedAt
       self.projectSlug = projectSlug
       self.compression = compression
+      self.prepared = prepared
       self.catalogItem = nil
     }
+
+    /// A reviewed card's switch can be turned: it has a copy to choose.
+    public var canCompress: Bool { prepared?.compression != nil }
 
     init(catalogItem item: CatalogAssetItem, projectSlug: String?) {
       let asset = item.asset
@@ -141,6 +158,14 @@ public final class DropZoneModel: ObservableObject {
   /// drag-over state's count and photo stack. Never a second read
   /// of the drag pasteboard.
   @Published public private(set) var draggedFileURLs: [URL] = []
+  /// ⇧ is down in the live drag: dropping now holds the images for review.
+  @Published public private(set) var dragHoldsShift = false
+  /// The cards held for review, dropped or still preparing, until Upload or
+  /// Cancel. Several ⇧ drops make one batch.
+  @Published public private(set) var reviewBatch: Set<UUID> = []
+  /// Cards Upload already sent on while they were still preparing: each
+  /// goes the moment it is ready.
+  private var sendsWhenPrepared: Set<UUID> = []
   /// The zone and the results list are one surface: the window shows
   /// while a qualifying drag is live, and from a drop (or Show Drop Zone)
   /// until the countdown, × or `disable()` ends the presentation.
@@ -200,6 +225,9 @@ public final class DropZoneModel: ObservableObject {
   /// clipboard, newline-joined — the batch shown on the panel is the batch
   /// copied.
   public var copiesURLsAutomatically = true
+  /// Settings ▸ Drop Zone ▸ Always review: every drop is held for review,
+  /// as if ⇧ were down.
+  public var alwaysReviews = false
   /// The copier seam: production gets the real clipboard; tests get a spy so
   /// no test ever writes the user's pasteboard.
   public var urlCopier: ((String) -> Void)?
@@ -261,6 +289,8 @@ public final class DropZoneModel: ObservableObject {
     let active = !fileURLs.isEmpty && gateSatisfied
     let wasActive = isDragActive
     isDragActive = active
+    let shift = modifiers.contains(.shift)
+    if shift != dragHoldsShift { dragHoldsShift = shift }
     // Gate or no gate: a pinned or revealed panel is a target either way.
     if fileURLs != draggedFileURLs { draggedFileURLs = fileURLs }
     if active != wasActive {
@@ -278,6 +308,7 @@ public final class DropZoneModel: ObservableObject {
   public func dragDidEnd() {
     isDragActive = false
     draggedFileURLs = []
+    dragHoldsShift = false
     restartCountdown()
     refreshVisibility()
   }
@@ -294,10 +325,18 @@ public final class DropZoneModel: ObservableObject {
     endPresentation()
   }
 
-  public func drop(fileURLs: [URL]) {
+  /// What a drop now would do: the drag-over title follows it.
+  public var dropReviews: Bool { alwaysReviews || dragHoldsShift }
+
+  /// Images arrive: they upload at once, or with ⇧ held (`modifiers` are
+  /// the keys down at the drop) or Always review on, they join the review
+  /// batch. A plain drop during a review uploads at once beside it.
+  public func drop(fileURLs: [URL], modifiers: NSEvent.ModifierFlags = []) {
     guard !isPreview else { return }
     isDragActive = false
     draggedFileURLs = []
+    dragHoldsShift = false
+    let reviews = alwaysReviews || modifiers.contains(.shift)
     guard !fileURLs.isEmpty else {
       refreshVisibility()
       return
@@ -308,14 +347,22 @@ public final class DropZoneModel: ObservableObject {
     let newCards = fileURLs.map { UploadCard(fileURL: $0, projectSlug: selectedProjectSlug) }
     // Newest first: a drop over existing cards lands on top,
     // where the pointer that just dropped it is looking.
-    uploadBatchSize += newCards.count
+    if reviews {
+      reviewBatch.formUnion(newCards.map(\.id))
+    } else {
+      uploadBatchSize += newCards.count
+    }
     cards.insert(contentsOf: newCards, at: 0)
     isPresenting = true
     // New pending cards: no countdown until the last of them ends.
     restartCountdown()
     refreshVisibility()
     enqueueThumbnails(for: newCards)
-    enqueueUploads(for: newCards)
+    if reviews {
+      enqueueReviews(for: newCards)
+    } else {
+      enqueueUploads(for: newCards)
+    }
   }
 
   /// ×: hide now and unpin. The cards stay for Show Drop Zone.
@@ -411,6 +458,60 @@ public final class DropZoneModel: ObservableObject {
     if appearing { onWindowDidShow?() }
   }
 
+  // MARK: - Review
+
+  /// The review batch's cards, in card order.
+  public var reviewCards: [UploadCard] { cards.filter { reviewBatch.contains($0.id) } }
+
+  public var isReviewing: Bool { !reviewBatch.isEmpty }
+
+  /// One card's switch. A card with no copy to choose stays on its original.
+  public func setCompresses(_ id: UUID, _ compresses: Bool) {
+    guard !isPreview else { return }
+    guard let index = cards.firstIndex(where: { $0.id == id }), cards[index].phase.isReview,
+      cards[index].canCompress
+    else { return }
+    cards[index].phase = .review(useOriginal: !compresses)
+  }
+
+  /// Compress All / Use Originals: every card that is ready and has a copy.
+  public func setAllCompress(_ compresses: Bool) {
+    guard !isPreview else { return }
+    for index in cards.indices
+    where reviewBatch.contains(cards[index].id) && cards[index].phase.isReview
+      && cards[index].canCompress
+    {
+      cards[index].phase = .review(useOriginal: !compresses)
+    }
+  }
+
+  /// Cancel: the batch goes, nothing sent. A card still preparing is
+  /// dropped when it is ready.
+  public func cancelReview() {
+    guard !isPreview, !reviewBatch.isEmpty else { return }
+    let batch = reviewBatch
+    reviewBatch = []
+    sendsWhenPrepared = []
+    let succeeded = batchHasSuccess
+    cards.removeAll { batch.contains($0.id) }
+    restartCountdown()
+    endBatchIfSettled(succeeded: succeeded)
+  }
+
+  /// Upload: every ready card goes as it is set; one still preparing goes
+  /// once it is ready. Links are copied when the last of them lands.
+  public func uploadReviewed() {
+    guard !isPreview, !reviewBatch.isEmpty else { return }
+    let batch = reviewCards
+    reviewBatch = []
+    sendsWhenPrepared.formUnion(batch.filter { $0.phase == .compressing }.map(\.id))
+    // A failed card leaves the batch and stays failed; its Retry uploads.
+    send(batch.filter(\.phase.isReview))
+  }
+
+  /// The bottom bar's numbers.
+  public var reviewSummary: ReviewSummary { ReviewSummary(cards: reviewCards) }
+
   // MARK: - Uploads
 
   /// The cards of permanently deleted images go; an
@@ -427,11 +528,16 @@ public final class DropZoneModel: ObservableObject {
     guard let index = cards.firstIndex(where: { $0.id == id }),
       case .failed = cards[index].phase
     else { return }
-    uploadBatchSize += 1
     cards[index].compression = nil
+    cards[index].prepared = nil
     cards[index].phase = .waiting
     restartCountdown()
-    enqueueUploads(for: [cards[index]])
+    if reviewBatch.contains(id) {
+      enqueueReviews(for: [cards[index]])
+    } else {
+      uploadBatchSize += 1
+      enqueueUploads(for: [cards[index]])
+    }
   }
 
   /// Drop-zone cards already point at the local source file, so this bypasses
@@ -497,8 +603,74 @@ public final class DropZoneModel: ObservableObject {
     }
   }
 
+  /// Prepares each card and holds it in review, its switch as its project
+  /// would have it. A card Upload already sent on goes straight up.
+  private func enqueueReviews(for targets: [UploadCard]) {
+    let service = self.service
+    let items = targets.map { (id: $0.id, fileURL: $0.fileURL, projectSlug: $0.projectSlug) }
+    Task { [weak self] in
+      await boundedForEach(items) { item in
+        await MainActor.run { self?.setPhase(.compressing, for: item.id) }
+        do {
+          let prepared = try await service.prepareForReview(
+            item.fileURL, projectSlug: item.projectSlug)
+          await MainActor.run { self?.holdForReview(prepared, for: item.id) }
+        } catch {
+          let phase = UploadCard.Phase.failed(Self.failureMessage(error))
+          await MainActor.run { self?.settle(phase, for: item.id) }
+        }
+      }
+    }
+  }
+
+  private func holdForReview(_ prepared: PreparedDrop, for id: UUID) {
+    guard let index = cards.firstIndex(where: { $0.id == id }) else { return }
+    // Read before the phase changes: holding the last pending card ends a
+    // running batch, which resets the flag.
+    let succeeded = batchHasSuccess
+    var card = cards[index]
+    card.prepared = prepared
+    card.compression = prepared.compression
+    card.phase = .review(useOriginal: !(prepared.compressesByDefault && card.canCompress))
+    cards[index] = card
+    if sendsWhenPrepared.remove(id) != nil {
+      send([card])
+    } else {
+      endBatchIfSettled(succeeded: succeeded)
+    }
+  }
+
+  /// Sends reviewed cards as they are set: the copy, or the original.
+  private func send(_ reviewed: [UploadCard]) {
+    let service = self.service
+    let items = reviewed.compactMap { card -> (id: UUID, prepared: PreparedDrop, useOriginal: Bool)? in
+      guard case .review(let useOriginal) = card.phase, let prepared = card.prepared else {
+        return nil
+      }
+      return (card.id, prepared, useOriginal)
+    }
+    guard !items.isEmpty else { return }
+    uploadBatchSize += items.count
+    for item in items {
+      beginUploading(item.useOriginal ? nil : item.prepared.compression, for: item.id)
+    }
+    restartCountdown()
+    Task { [weak self] in
+      await boundedForEach(items) { item in
+        let phase: UploadCard.Phase
+        do {
+          phase = .done(try await service.upload(item.prepared, useOriginal: item.useOriginal))
+        } catch {
+          phase = .failed(Self.failureMessage(error))
+        }
+        await MainActor.run { self?.settle(phase, for: item.id) }
+      }
+    }
+  }
+
+  /// Uploads only: a card being prepared for review is not on its way yet.
   private func refreshUploadProgress() {
-    let pending = cards.filter(\.phase.isPending)
+    let pending = cards.filter { $0.phase.isPending && !reviewBatch.contains($0.id) }
     guard !pending.isEmpty else {
       uploadBatchSize = 0
       batchHasSuccess = false
@@ -551,11 +723,16 @@ public final class DropZoneModel: ObservableObject {
     if case .done(let outcome) = phase, outcome.deduplicated {
       mergeDuplicate(id, outcome: outcome)
     }
-    if !cards.isEmpty, cards.allSatisfy({ !$0.phase.isPending }) {
-      if batchSucceeded { copySettledURLs() }
-      restartCountdown()
-      onUploadsSettled?()
-    }
+    endBatchIfSettled(succeeded: batchSucceeded)
+  }
+
+  /// The last pending card has settled: the batch's links are copied, the
+  /// countdown may start, and the app hears of it.
+  private func endBatchIfSettled(succeeded: Bool) {
+    guard !cards.isEmpty, cards.allSatisfy({ !$0.phase.isPending }) else { return }
+    if succeeded { copySettledURLs() }
+    restartCountdown()
+    onUploadsSettled?()
   }
 
   /// A drop that the library already held: when a done
@@ -604,7 +781,7 @@ public final class DropZoneModel: ObservableObject {
     cancelAutoHide()
     let delay = autoHidesResultsAfter
     guard delay > 0, isPresenting, !isPinned, !isPointerInside, !isDragActive,
-      !cards.contains(where: { $0.phase.isPending })
+      !cards.contains(where: { $0.phase.isPending }), reviewBatch.isEmpty
     else { return }
     cancelCountdown = autoHideScheduler(delay) { [weak self] in
       self?.cancelCountdown = nil
@@ -708,9 +885,65 @@ public final class DropZoneModel: ObservableObject {
     precondition(isPreview, "seedPreview is for a preview's model only")
     self.projects = projects
     self.cards = cards
+    // The cards held for review are the batch: a seed with none ends it.
+    self.reviewBatch = Set(cards.filter(\.phase.isReview).map(\.id))
     self.draggedFileURLs = draggedFileURLs
     isSeedingPreview = true
     self.selectedProjectSlug = selectedProjectSlug
     isSeedingPreview = false
   }
+}
+
+/// What the review bar says and which of its buttons can act.
+public struct ReviewSummary: Equatable {
+  public let count: Int
+  /// The originals' bytes, of the cards that are ready.
+  public let sourceBytes: Int64
+  /// What Upload would send, as each card is set.
+  public let uploadBytes: Int64
+  /// A ready card with a copy is set to its original (Compress All acts).
+  public let canCompressAll: Bool
+  /// A ready card is set to its copy (Use Originals acts).
+  public let canUseOriginals: Bool
+
+  init(cards: [DropZoneModel.UploadCard]) {
+    count = cards.count
+    var source: Int64 = 0
+    var upload: Int64 = 0
+    var anyOriginal = false
+    var anyCopy = false
+    for card in cards {
+      guard case .review(let useOriginal) = card.phase, let prepared = card.prepared else {
+        continue
+      }
+      let original = prepared.sourceByteSize ?? 0
+      source += original
+      if let copy = prepared.compression, !useOriginal {
+        upload += copy.byteSize
+        anyCopy = true
+      } else {
+        upload += original
+        if prepared.compression != nil { anyOriginal = true }
+      }
+    }
+    sourceBytes = source
+    uploadBytes = upload
+    canCompressAll = anyOriginal
+    canUseOriginals = anyCopy
+  }
+
+  /// "4 images · 8.8 MB → 1.8 MB"; one size when nothing shrinks, none
+  /// while every card is still preparing.
+  public var text: String {
+    let images = count == 1 ? "1 image" : "\(count) images"
+    guard sourceBytes > 0 else { return images }
+    let sizes =
+      sourceBytes == uploadBytes
+      ? PinaxFormat.fileSize(uploadBytes)
+      : "\(PinaxFormat.fileSize(sourceBytes)) → \(PinaxFormat.fileSize(uploadBytes))"
+    return "\(images) · \(sizes)"
+  }
+
+  /// "4 images", the bar's leading words.
+  public var countText: String { count == 1 ? "1 image" : "\(count) images" }
 }

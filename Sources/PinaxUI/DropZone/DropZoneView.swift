@@ -75,7 +75,8 @@ public struct DropZoneView: View {
             MainActor.assumeIsolated { state.motions = motions }
           }
           .dropDestination(for: URL.self) { urls, _ in
-            model.drop(fileURLs: urls)
+            // The keys down as the drop lands: ⇧ holds it for review.
+            model.drop(fileURLs: urls, modifiers: NSEvent.modifierFlags)
             return true
           } isTargeted: { targeted in
             state.isDropTargeted = targeted
@@ -130,9 +131,18 @@ public struct DropZoneView: View {
     if model.cards.isEmpty {
       emptyStateContent
     } else {
-      switch state.layout {
-      case .list: cardsList
-      case .shelf: shelf
+      VStack(spacing: DesignMetrics.spacing.s) {
+        switch state.layout {
+        case .list: cardsList
+        case .shelf: shelf
+        }
+        if model.isReviewing {
+          DropZoneReviewBar(model: model, handlesKeys: !isPreview)
+            // Edge to edge, down to the panel's bottom.
+            .padding(.horizontal, -DesignMetrics.dropZone.panelInset)
+            .padding(.bottom, -DesignMetrics.dropZone.panelInset)
+            .dropZoneLayout(.reviewBar)
+        }
       }
     }
   }
@@ -216,7 +226,9 @@ public struct DropZoneView: View {
   }
 
   var dragOverlayContent: DropZoneDragOverlay {
-    DropZoneDragOverlay(fileURLs: model.draggedFileURLs, projectName: selectedProjectName)
+    DropZoneDragOverlay(
+      fileURLs: model.draggedFileURLs, projectName: selectedProjectName,
+      reviews: model.dropReviews)
   }
 
   /// The empty state's viewfinder, which a drag keeps as it is — same
@@ -385,7 +397,7 @@ struct DropZoneLayoutKey: PreferenceKey {
   enum Role: Hashable {
     case card, thumbnail, text, buttons, filename, statusLayer, statusText, meta, error, retry
     case moveError, emptyState, dropOverlay, panel, preview, projectPicker, projectToken, shelfBar
-    case viewfinder, scroll
+    case viewfinder, scroll, reviewBar, reviewSwitch
     case action(String)
   }
 

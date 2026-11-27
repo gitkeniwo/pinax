@@ -38,6 +38,9 @@ struct ShelfCellView: View {
       .overlay(alignment: .bottom) {
         if hovered { actionBar }
       }
+      .overlay(alignment: .topTrailing) {
+        if model.reviewBatch.contains(card.id) { reviewSwitch }
+      }
       .dropZoneLayout(.thumbnail, card: card.id)
       Text(card.filename)
         .fontWeight(.semibold)
@@ -80,6 +83,13 @@ struct ShelfCellView: View {
         .foregroundStyle(palette.failed)
         .pinaxCaption()
         .help(status.help ?? "")
+    } else if status.kind == .review {
+      status.shelfWords(saving: palette.done, unsent: palette.tertiary)
+        .foregroundStyle(palette.secondary)
+        .pinaxCaption()
+        .monospacedDigit()
+        .lineLimit(1)
+        .help(status.shelfHelp ?? "")
     } else if status.kind == .uploaded {
       TimelineView(.periodic(from: .now, by: 30)) { context in
         let current = DropZoneCardStatus(card: card, now: context.date)
@@ -99,6 +109,19 @@ struct ShelfCellView: View {
         .pinaxCaption()
         .help(status.shelfHelp ?? "")
     }
+  }
+
+  /// In review, always shown: the switch on a small capsule of the hover
+  /// bar's dark glass, inside the image's top-right corner.
+  private var reviewSwitch: some View {
+    DropZoneReviewSwitch(card: card, model: model, showsLabel: false)
+      .padding(M.reviewSwitchPadding)
+      .background {
+        Capsule().fill(.ultraThinMaterial)
+          .overlay(Capsule().fill(Color.black.opacity(M.shelfBarScrim)))
+      }
+      .environment(\.colorScheme, .dark)
+      .padding(M.reviewSwitchInset)
   }
 
   /// The hover bar: the List row's actions, white on a dark glass scrim

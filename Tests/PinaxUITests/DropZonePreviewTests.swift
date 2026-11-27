@@ -129,12 +129,60 @@ import Testing
         == "1200 × 630 · \(PinaxFormat.fileSize(96_000))")
   }
 
+  @Test("Review: four cards held with their switches and the bar's total")
+  func reviewSamples() throws {
+    let directory = makeDirectory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    #expect(DropZonePreviewStage.allCases.map(\.label) == ["Empty", "Dragging", "Review", "Results"])
+    let preview = DropZonePreviewController(directory: directory, service: SpyService())
+    preview.show(.review, projects: [], projectSlug: "astro")
+
+    let cards = preview.model.cards
+    #expect(
+      cards.map(\.filename)
+        == ["IMG_2817.jpg", "IMG_2041.heic", "banner-wide.jpg", "screenshot-0412.png"])
+    #expect(
+      cards.map(\.phase) == [
+        .review(useOriginal: false), .review(useOriginal: false), .review(useOriginal: true),
+        .review(useOriginal: true),
+      ])
+    #expect(cards.map(\.canCompress) == [true, true, true, false])
+    #expect(cards.allSatisfy { $0.thumbnail != nil })
+    #expect(preview.model.isReviewing)
+    #expect(!preview.state.isDropTargeted)
+    let state = DropZoneViewState()
+    #expect(
+      cards.map { DropZoneCardStatus(card: $0).listText } == [
+        "\(PinaxFormat.fileSize(4_600_000)) → \(PinaxFormat.fileSize(336_000)) · −93%",
+        "\(PinaxFormat.fileSize(3_100_000)) → \(PinaxFormat.fileSize(412_000)) · −87% · HEIC → JPEG",
+        "\(PinaxFormat.fileSize(640_000)) → \(PinaxFormat.fileSize(188_000))",
+        "Original · not smaller",
+      ])
+    #expect(
+      cards.map { ResultCardView(card: $0, model: preview.model, state: state).metaText } == [
+        "6000 × 4000 → 2048 × 1365", "4032 × 3024 → 2048 × 1536", "1920 × 480",
+        "2880 × 1800 · \(PinaxFormat.fileSize(412_000))",
+      ])
+    #expect(
+      preview.model.reviewSummary.text
+        == "4 images · \(PinaxFormat.fileSize(8_752_000)) → \(PinaxFormat.fileSize(1_800_000))")
+
+    // The bar's buttons do nothing here, as the cards' do not.
+    preview.model.setAllCompress(true)
+    preview.model.uploadReviewed()
+    preview.model.cancelReview()
+    #expect(preview.model.cards.map(\.phase) == cards.map(\.phase))
+
+    preview.show(.results, projects: [], projectSlug: "astro")
+    #expect(!preview.model.isReviewing)
+  }
+
   @Test("The pictures are PNG files in the given directory; a second showing leaves them as they are")
   func picturesWrittenOnce() throws {
     let directory = makeDirectory()
     defer { try? FileManager.default.removeItem(at: directory) }
     let first = DropZonePreviewSamples.pictures(in: directory)
-    #expect(first.urls.count == 6)
+    #expect(first.urls.count == 8)
     for url in first.urls.values {
       #expect(url.deletingLastPathComponent().standardizedFileURL == directory.standardizedFileURL)
       #expect(CGImageSourceCreateWithURL(url as CFURL, nil).flatMap { CGImageSourceGetType($0) } as String? == "public.png")

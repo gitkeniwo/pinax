@@ -17,6 +17,7 @@ public final class PreferencesStore: ObservableObject {
   private static let dropZoneFollowsCursorKey = "pinax.dropZone.followsCursor"
   private static let dropZoneAutoHideSecondsKey = "pinax.dropZone.autoHideSeconds"
   private static let copiesURLsOnUploadKey = "pinax.dropZone.copiesURLsOnUpload"
+  private static let dropZoneAlwaysReviewsKey = "pinax.dropZone.alwaysReviews"
   private static let dropZoneAppearanceKey = "pinax.dropZone.appearance"
   private static let dropZoneLayoutKey = "pinax.dropZone.layout"
   private static let dropZoneUploadIntoKey = "pinax.dropZone.uploadInto"
@@ -98,6 +99,11 @@ public final class PreferencesStore: ObservableObject {
 
   @Published public var copiesURLsOnUpload: Bool {
     didSet { defaults.set(copiesURLsOnUpload, forKey: Self.copiesURLsOnUploadKey) }
+  }
+
+  /// Every drop waits for review, as if ⇧ were held. Off by default.
+  @Published public var dropZoneAlwaysReviews: Bool {
+    didSet { defaults.set(dropZoneAlwaysReviews, forKey: Self.dropZoneAlwaysReviewsKey) }
   }
 
   /// The panel's look — Match System and List by
@@ -446,6 +452,8 @@ public final class PreferencesStore: ObservableObject {
         defaults.object(forKey: Self.dropZoneAutoHideSecondsKey) as? Int ?? 30))
     _copiesURLsOnUpload = Published(
       wrappedValue: defaults.object(forKey: Self.copiesURLsOnUploadKey) as? Bool ?? true)
+    _dropZoneAlwaysReviews = Published(
+      wrappedValue: defaults.object(forKey: Self.dropZoneAlwaysReviewsKey) as? Bool ?? false)
     _dropZoneAppearance = Published(
       wrappedValue: DropZoneAppearance(
         rawValue: defaults.string(forKey: Self.dropZoneAppearanceKey) ?? "") ?? .system)

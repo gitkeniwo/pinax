@@ -41,6 +41,14 @@ public struct DropZonePalette {
   public let paper: Color
   /// The drag overlay's thin glass wash.
   public let dropWash: Color
+  /// Words that step back further than `secondary`: a copy that will not
+  /// be sent.
+  public let tertiary: Color
+  /// Review's bottom bar: its hairline, its buttons' ground, and Upload's
+  /// green, a step deeper than the dark accent so white text reads on it.
+  public let rule: Color
+  public let buttonFill: Color
+  public let primaryButton: Color
 
   public static let light = DropZonePalette(
     primary: Color(hex: 0x1d1d1f),
@@ -64,7 +72,11 @@ public struct DropZonePalette {
     track: Color.black.opacity(0.16),
     ink: Color(hex: 0x3d3a36),
     paper: Color(hex: 0xfbfaf7),
-    dropWash: Color(hex: 0xfafafc, opacity: 0.35))
+    dropWash: Color(hex: 0xfafafc, opacity: 0.35),
+    tertiary: Color(hex: 0x8e8e93),
+    rule: Color.black.opacity(0.10),
+    buttonFill: Color.black.opacity(0.06),
+    primaryButton: Color(hex: 0x367f2b))
 
   public static let dark = DropZonePalette(
     primary: Color(hex: 0xf5f5f7),
@@ -88,7 +100,11 @@ public struct DropZonePalette {
     track: Color.white.opacity(0.22),
     ink: Color(hex: 0xa9a9b1),
     paper: Color(hex: 0x4a4a51),
-    dropWash: Color(hex: 0x141418, opacity: 0.30))
+    dropWash: Color(hex: 0x141418, opacity: 0.30),
+    tertiary: Color(hex: 0x85858d),
+    rule: Color.white.opacity(0.14),
+    buttonFill: Color.white.opacity(0.14),
+    primaryButton: Color(hex: 0x367f2b))
 
   public static func of(_ scheme: ColorScheme) -> DropZonePalette {
     scheme == .dark ? dark : light

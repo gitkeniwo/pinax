@@ -213,6 +213,56 @@ import Testing
     }
   }
 
+  @Test("Preparing for review always makes a copy; the switch starts as the project would send it")
+  func reviewPreparesCopy() async throws {
+    try await withUploadDatabase { database in
+      let photo = try #require(makeNoisyJPEGData(width: 3000, height: 2000))
+      let file = try writeTempFile(photo)
+      defer { try? FileManager.default.removeItem(at: file) }
+      let uploader = RecordingUploader()
+      let catalog = UploadCatalog(
+        database: database,
+        credentialsLoader: { _ in BackendCredentials(accessKeyID: "key", secretAccessKey: "secret") },
+        uploaderFactory: { _, _ in uploader }
+      )
+      try CatalogConfiguration.setCompression(slug: "blog", in: database) {
+        $0.isEnabled = true
+        $0.options.longestEdge = 600
+      }
+      try CatalogConfiguration.setCompression(slug: "notes", in: database) {
+        $0.isEnabled = false
+        $0.options.longestEdge = 600
+      }
+
+      let blog = try await catalog.prepareForReview(file, projectSlug: "blog")
+      #expect(blog.compressesByDefault)
+      #expect(blog.compression?.options.longestEdge == 600)
+      #expect(blog.originalReason == nil)
+
+      // Off, or No Project: a copy with the default options, the switch off.
+      for slug in ["notes", nil] {
+        let prepared = try await catalog.prepareForReview(file, projectSlug: slug)
+        let copy = try #require(prepared.compression, "\(slug ?? "No Project")")
+        #expect(!prepared.compressesByDefault)
+        #expect(copy.options == .default)
+        #expect(prepared.sourceByteSize == Int64(photo.count))
+        #expect(prepared.sourceWidth == 3000)
+      }
+      #expect(uploader.uploadedKeys.isEmpty, "preparing sends nothing")
+
+      let outcome = try await catalog.upload(
+        try await catalog.prepareForReview(file, projectSlug: "notes"), useOriginal: true)
+      #expect(outcome.byteSize == Int64(photo.count))
+      #expect(outcome.compression == nil)
+
+      // Now in the library as it is: nothing to choose.
+      let again = try await catalog.prepareForReview(file, projectSlug: "blog")
+      #expect(again.compression == nil)
+      #expect(again.originalReason == .inLibrary)
+      #expect(again.sourceWidth == 3000)
+    }
+  }
+
   @Test("useOriginal sends the file as it is, and the composed upload follows the switch")
   func originalAndComposedUploads() async throws {
     try await withUploadDatabase { database in
