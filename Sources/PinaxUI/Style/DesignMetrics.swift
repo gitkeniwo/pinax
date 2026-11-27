@@ -253,6 +253,21 @@ public enum DesignMetrics {
     public static let shelfBarButtonWidth: CGFloat = 28
     public static let shelfBarButtonHeight: CGFloat = 24
     public static let shelfBarScrim: Double = 0.5
+    /// Review: the Shelf's switch sits in a glass capsule 6 pt inside the
+    /// image's top-right corner.
+    public static let reviewSwitchInset: CGFloat = 6
+    public static let reviewSwitchPadding: CGFloat = 3
+    /// Review's bottom bar: a hairline, 10 pt, the total, 8 pt, a 24 pt
+    /// row of buttons, then the panel's own inset.
+    public static let reviewBarTop: CGFloat = 10
+    public static let reviewBarGap: CGFloat = 8
+    public static let reviewBarRule: CGFloat = 0.5
+    public static let reviewButtonHeight: CGFloat = 24
+    public static let reviewButtonRadius: CGFloat = 6
+    public static let reviewButtonPadding: CGFloat = 10
+    public static let reviewPairPadding: CGFloat = 8
+    public static let reviewButtonGap: CGFloat = 6
+    public static let reviewDimmedOpacity: Double = 0.4
     /// A card's hairline rim and its shadow at rest (canvas v4: 0 1 3) and
     /// hovered (0 6 18): radius and drop.
     public static let cardRimWidth: CGFloat = 0.5

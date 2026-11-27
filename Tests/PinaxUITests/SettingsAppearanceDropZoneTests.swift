@@ -90,6 +90,7 @@ import Testing
     for (title, key) in [
       ("Show drop zone while dragging", "pinax.dropZone.enabled"),
       ("Copy links when a batch finishes", "pinax.dropZone.copiesURLsOnUpload"),
+      ("Always review", "pinax.dropZone.alwaysReviews"),
       ("Only while holding a key", "pinax.dropZone.requiresModifier"),
       ("Follow the pointer across displays", "pinax.dropZone.followsCursor"),
     ] {

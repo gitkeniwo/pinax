@@ -25,31 +25,78 @@ public enum UploadCatalogError: Error, Equatable, CustomStringConvertible {
 /// A file looked up and, when its project asks, recompressed: ready to
 /// upload.
 public struct PreparedDrop: Sendable {
+  /// Why a file can only go up as it is.
+  public enum OriginalReason: Equatable, Sendable {
+    /// The copy saved too little.
+    case notSmaller
+    /// Transparent, animated, or a format the compressor leaves alone.
+    case notCompressible
+    /// The library already has these bytes; nothing is sent.
+    case inLibrary
+  }
+
   public let fileURL: URL
   public let projectSlug: String?
   /// The copy that is about to be sent; nil when none was made.
   public let compression: CardCompression?
+  /// The original as it is on disk, for a card that shows it before it is
+  /// sent; nil when nobody measured it.
+  public let sourceByteSize: Int64?
+  public let sourceWidth: Int?
+  public let sourceHeight: Int?
+  /// Whether the project itself would send the copy: a reviewed card's
+  /// switch starts here.
+  public let compressesByDefault: Bool
+  /// Set only when there is no copy to choose.
+  public let originalReason: OriginalReason?
   /// `UploadCatalog`'s own half-done upload; nil from any other service.
   let pending: (pipeline: UploadPipeline, upload: PreparedUpload)?
 
-  public init(fileURL: URL, projectSlug: String?, compression: CardCompression? = nil) {
+  public init(
+    fileURL: URL, projectSlug: String?, compression: CardCompression? = nil,
+    sourceByteSize: Int64? = nil, sourceWidth: Int? = nil, sourceHeight: Int? = nil,
+    compressesByDefault: Bool? = nil, originalReason: OriginalReason? = nil
+  ) {
     self.fileURL = fileURL
     self.projectSlug = projectSlug
     self.compression = compression
+    self.sourceByteSize = sourceByteSize ?? compression?.sourceByteSize
+    self.sourceWidth = sourceWidth ?? compression?.sourceWidth
+    self.sourceHeight = sourceHeight ?? compression?.sourceHeight
+    self.compressesByDefault = compressesByDefault ?? (compression != nil)
+    self.originalReason = compression == nil ? (originalReason ?? .notSmaller) : nil
     self.pending = nil
   }
 
   init(
-    pipeline: UploadPipeline, upload: PreparedUpload, projectSlug: String?
+    pipeline: UploadPipeline, upload: PreparedUpload, projectSlug: String?,
+    compressesByDefault: Bool, reusedCopy: CardCompression? = nil
   ) {
     self.fileURL = upload.fileURL
     self.projectSlug = projectSlug
     if let image = upload.compression?.compressedImage, let options = upload.compressionOptions {
       self.compression = CardCompression(image: image, options: options)
     } else {
-      self.compression = nil
+      self.compression = reusedCopy
+    }
+    // Without a copy the original's own header says how big it is.
+    let dimensions = compression == nil ? ImageProbe.dimensions(ofFileAt: upload.fileURL) : nil
+    self.sourceByteSize =
+      upload.sourceByteSize ?? compression?.sourceByteSize ?? Self.fileSize(upload.fileURL)
+    self.sourceWidth = compression?.sourceWidth ?? dimensions?.width
+    self.sourceHeight = compression?.sourceHeight ?? dimensions?.height
+    self.compressesByDefault = compressesByDefault
+    switch (compression, upload.match, upload.compression?.skipReason) {
+    case (.some, _, _): self.originalReason = nil
+    case (nil, .original, _): self.originalReason = .inLibrary
+    case (nil, _, .notSmaller), (nil, _, nil): self.originalReason = .notSmaller
+    case (nil, _, .some): self.originalReason = .notCompressible
     }
     self.pending = (pipeline, upload)
+  }
+
+  private static func fileSize(_ url: URL) -> Int64? {
+    (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init)
   }
 }
 
@@ -61,12 +108,23 @@ public protocol DropZoneService: Sendable {
   /// Everything before sending: resolves the destination, looks the file up
   /// and recompresses it when the project asks.
   func prepare(_ fileURL: URL, projectSlug: String?) async throws -> PreparedDrop
+  /// The same for a file the user reviews before it is sent: a copy is
+  /// made even when the project would not send one, so switching
+  /// compression on needs no second pass.
+  func prepareForReview(_ fileURL: URL, projectSlug: String?) async throws -> PreparedDrop
   /// Sends a prepared file: its compressed copy when it has one, unless
   /// `useOriginal`.
   func upload(_ prepared: PreparedDrop, useOriginal: Bool) async throws -> UploadOutcome
   func moveAsset(
     sha256: String, fromProject: String?, toProject: String?, confirmed: Bool
   ) async throws
+}
+
+extension DropZoneService {
+  /// A service with nothing to add prepares a reviewed file as any other.
+  public func prepareForReview(_ fileURL: URL, projectSlug: String?) async throws -> PreparedDrop {
+    try await prepare(fileURL, projectSlug: projectSlug)
+  }
 }
 
 /// The upload write path. The drop zone reaches uploading through this type alone;
@@ -103,6 +161,34 @@ public struct UploadCatalog: DropZoneService {
   /// Compression follows the project's switch; No Project is never
   /// compressed.
   public func prepare(_ fileURL: URL, projectSlug: String?) async throws -> PreparedDrop {
+    let (pipeline, project) = try makePipeline(projectSlug: projectSlug)
+    let options = CompressionChoice.project.options(for: project)
+    let prepared = try await pipeline.prepare(fileURL: fileURL, compression: options)
+    return PreparedDrop(
+      pipeline: pipeline, upload: prepared, projectSlug: projectSlug,
+      compressesByDefault: options != nil)
+  }
+
+  /// A project that does not compress (or No Project) is offered a copy
+  /// made with the default options.
+  public func prepareForReview(_ fileURL: URL, projectSlug: String?) async throws -> PreparedDrop {
+    let (pipeline, project) = try makePipeline(projectSlug: projectSlug)
+    let projectOptions = CompressionChoice.project.options(for: project)
+    let prepared = try await pipeline.prepare(
+      fileURL: fileURL, compression: projectOptions ?? .default)
+    // A copy the library already holds was not made again; a dry run of its
+    // reuse reads its sizes back without linking anything.
+    var reused: CardCompression?
+    if case .compressedCopy = prepared.match {
+      let outcome = try await pipeline.upload(prepared, useOriginal: false, dryRun: true)
+      reused = CardCompression(outcome: outcome)
+    }
+    return PreparedDrop(
+      pipeline: pipeline, upload: prepared, projectSlug: projectSlug,
+      compressesByDefault: projectOptions != nil, reusedCopy: reused)
+  }
+
+  private func makePipeline(projectSlug: String?) throws -> (UploadPipeline, Project?) {
     let projects = try CatalogConfiguration.projects(in: database)
     var project: Project?
     if let projectSlug {
@@ -122,9 +208,7 @@ public struct UploadCatalog: DropZoneService {
       backend: backend,
       project: project
     )
-    let prepared = try await pipeline.prepare(
-      fileURL: fileURL, compression: CompressionChoice.project.options(for: project))
-    return PreparedDrop(pipeline: pipeline, upload: prepared, projectSlug: projectSlug)
+    return (pipeline, project)
   }
 
   public func upload(_ prepared: PreparedDrop, useOriginal: Bool) async throws -> UploadOutcome {

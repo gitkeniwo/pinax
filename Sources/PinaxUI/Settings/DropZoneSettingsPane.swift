@@ -122,6 +122,10 @@ struct DropZoneSettingsPane: View {
             Text(DropZoneAutoHide.label(preferences.dropZoneAutoHideSeconds))
           }
         }
+        SettingsRowDivider()
+        SettingsRow("Always review", subtitle: "Or hold ⇧ when you drop.") {
+          SettingsRowSwitch("Always review", isOn: $preferences.dropZoneAlwaysReviews)
+        }
       }
     }
   }

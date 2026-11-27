@@ -6,14 +6,15 @@ import UniformTypeIdentifiers
 
 private typealias Metrics = DesignMetrics.settings
 
-/// The preview's three states, chosen under it. Lives in the page only.
+/// The preview's four states, chosen under it. Lives in the page only.
 enum DropZonePreviewStage: CaseIterable, Hashable {
-  case empty, dragging, results
+  case empty, dragging, review, results
 
   var label: String {
     switch self {
     case .empty: "Empty"
     case .dragging: "Dragging"
+    case .review: "Review"
     case .results: "Results"
     }
   }
@@ -24,7 +25,7 @@ enum DropZonePreviewStage: CaseIterable, Hashable {
 /// cards are built afresh for each showing, never kept, so a state can be
 /// shown again from the start.
 enum DropZonePreviewSamples {
-  /// The six pictures, in card order.
+  /// The pictures: Results' six in card order, then Review's two more.
   enum Picture: String, CaseIterable {
     case forest = "IMG_2817"
     case sunset = "hero-sunset"
@@ -32,6 +33,8 @@ enum DropZonePreviewSamples {
     case map = "trail-map"
     case cover = "cover-2024"
     case photo = "IMG_2041"
+    case banner = "banner-wide"
+    case screenshot = "screenshot-0412"
 
     var pixelSize: (width: Int, height: Int) {
       switch self {
@@ -41,6 +44,8 @@ enum DropZonePreviewSamples {
       case .map: (320, 200)
       case .cover: (320, 168)
       case .photo: (240, 320)
+      case .banner: (320, 80)
+      case .screenshot: (320, 200)
       }
     }
   }
@@ -85,13 +90,45 @@ enum DropZonePreviewSamples {
     guard stage != .empty else { return [] }
     func card(
       _ filename: String, _ picture: Picture, _ phase: DropZoneModel.UploadCard.Phase,
-      landedAt: Date? = nil, compression: CardCompression? = nil
+      landedAt: Date? = nil, compression: CardCompression? = nil, prepared: PreparedDrop? = nil
     ) -> DropZoneModel.UploadCard {
       DropZoneModel.UploadCard(
         filename: filename,
         fileURL: pictures.urls[picture] ?? URL(fileURLWithPath: filename),
         phase: phase, thumbnail: pictures.images[picture], landedAt: landedAt,
-        projectSlug: projectSlug, compression: compression)
+        projectSlug: projectSlug, compression: compression, prepared: prepared)
+    }
+    if stage == .review {
+      // Held for review: two copies on, one set back to its original, one
+      // with no copy worth sending.
+      func reviewed(
+        _ filename: String, _ picture: Picture, useOriginal: Bool, copy: CardCompression?,
+        original: (bytes: Int64, width: Int, height: Int)? = nil
+      ) -> DropZoneModel.UploadCard {
+        let prepared = PreparedDrop(
+          fileURL: pictures.urls[picture] ?? URL(fileURLWithPath: filename),
+          projectSlug: projectSlug, compression: copy, sourceByteSize: original?.bytes,
+          sourceWidth: original?.width, sourceHeight: original?.height,
+          compressesByDefault: true, originalReason: copy == nil ? .notSmaller : nil)
+        return card(
+          filename, picture, .review(useOriginal: useOriginal), compression: copy,
+          prepared: prepared)
+      }
+      return [
+        reviewed(
+          "IMG_2817.jpg", .forest, useOriginal: false,
+          copy: compression(from: 4_600_000, 6000, 4000, to: 336_000, 2048, 1365)),
+        reviewed(
+          "IMG_2041.heic", .photo, useOriginal: false,
+          copy: compression(
+            from: 3_100_000, 4032, 3024, to: 412_000, 2048, 1536, sourceMime: "image/heic")),
+        reviewed(
+          "banner-wide.jpg", .banner, useOriginal: true,
+          copy: compression(from: 640_000, 1920, 480, to: 188_000, 1920, 480)),
+        reviewed(
+          "screenshot-0412.png", .screenshot, useOriginal: true, copy: nil,
+          original: (412_000, 2880, 1800)),
+      ]
     }
     return [
       card("IMG_2817.jpg", .forest, .compressing),
@@ -123,14 +160,15 @@ enum DropZonePreviewSamples {
     ]
   }
 
-  /// A JPEG recompressed with the default options.
+  /// A JPEG (unless `sourceMime` says otherwise) recompressed with the
+  /// default options.
   private static func compression(
     from sourceBytes: Int64, _ sourceWidth: Int, _ sourceHeight: Int,
-    to bytes: Int64, _ width: Int, _ height: Int
+    to bytes: Int64, _ width: Int, _ height: Int, sourceMime: String = "image/jpeg"
   ) -> CardCompression {
     CardCompression(
       sourceByteSize: sourceBytes, sourceWidth: sourceWidth, sourceHeight: sourceHeight,
-      sourceMime: "image/jpeg", byteSize: bytes, width: width, height: height,
+      sourceMime: sourceMime, byteSize: bytes, width: width, height: height,
       mime: "image/jpeg", options: .default)
   }
 
@@ -238,6 +276,21 @@ enum DropZonePreviewSamples {
       context.setFillColor(rgb(0x3e3128, 0.55))
       context.fill(CGRect(x: w * 0.18, y: 0, width: w * 0.22, height: h * 0.58))
       context.fill(CGRect(x: w * 0.52, y: 0, width: w * 0.34, height: h * 0.42))
+    case .banner:
+      wash([0x2d4f86, 0x6f9fd6], from: .zero, to: CGPoint(x: w, y: 0))
+      context.setFillColor(rgb(0x1f3b6b))
+      context.fill(CGRect(x: 0, y: h * 0.3, width: w, height: h * 0.4))
+    case .screenshot:
+      context.setFillColor(rgb(0xf2f2f5))
+      context.fill(CGRect(x: 0, y: 0, width: w, height: h))
+      context.setFillColor(rgb(0xdcdce2))
+      for row in stride(from: CGFloat(8), to: h * 0.82, by: 14) {
+        context.fill(CGRect(x: w * 0.3, y: row, width: w * 0.62, height: 2))
+      }
+      context.setFillColor(rgb(0x2b2b30))
+      context.fill(CGRect(x: 0, y: 0, width: w * 0.26, height: h * 0.82))
+      context.setFillColor(rgb(0x3a3a40))
+      context.fill(CGRect(x: 0, y: h * 0.82, width: w, height: h * 0.18))
     }
     return context.makeImage()
   }
