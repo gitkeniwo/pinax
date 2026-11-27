@@ -80,7 +80,7 @@ import Testing
 
   // MARK: Samples
 
-  @Test("Results: four cards, uploading, just landed, in library, failed, with their words")
+  @Test("Results: six cards, compressing, uploading, two just landed, in library, failed, with their words")
   func resultsSamples() throws {
     let directory = makeDirectory()
     defer { try? FileManager.default.removeItem(at: directory) }
@@ -89,15 +89,24 @@ import Testing
     let cards = DropZonePreviewSamples.cards(
       for: .results, pictures: pictures, projectSlug: "astro", now: now)
 
-    #expect(cards.map(\.filename) == ["hero-sunset.jpg", "trail-map.png", "cover-2024.webp", "IMG_2041.heic"])
+    #expect(
+      cards.map(\.filename) == [
+        "IMG_2817.jpg", "hero-sunset.jpg", "pier-dawn.jpg", "trail-map.png", "cover-2024.webp",
+        "IMG_2041.heic",
+      ])
     let statuses = cards.map { DropZoneCardStatus(card: $0, now: now) }
-    #expect(statuses.map(\.kind) == [Kind.uploading, .uploaded, .inLibrary, .failed])
-    #expect(statuses[1].listText == "Just now")
-    #expect(statuses[2].listText == "Already in library")
-    #expect(cards[1].landedAt == now)
+    #expect(
+      statuses.map(\.kind)
+        == [Kind.compressing, .uploading, .uploaded, .uploaded, .inLibrary, .failed])
+    #expect(statuses[2].listText == "Just now · −91%")
+    #expect(statuses[3].listText == "Just now")
+    #expect(statuses[4].listText == "Already in library")
+    #expect(cards[2].landedAt == now)
+    #expect(cards[3].landedAt == now)
+    #expect(cards.map { $0.compression != nil } == [false, true, true, false, false, false])
     #expect(cards.allSatisfy { $0.thumbnail != nil })
     #expect(cards.allSatisfy { $0.projectSlug == "astro" })
-    guard case .failed(let message) = cards[3].phase else {
+    guard case .failed(let message) = cards[5].phase else {
       Issue.record("the last card is not a failure")
       return
     }
@@ -105,11 +114,18 @@ import Testing
 
     let model = DropZoneModel.preview(directory: directory)
     let state = DropZoneViewState()
+    #expect(ResultCardView(card: cards[0], model: model, state: state).metaText == "")
     #expect(
       ResultCardView(card: cards[1], model: model, state: state).metaText
-        == "1600 × 1000 · \(PinaxFormat.fileSize(284_000))")
+        == "\(PinaxFormat.fileSize(4_100_000)) → \(PinaxFormat.fileSize(298_000))")
     #expect(
       ResultCardView(card: cards[2], model: model, state: state).metaText
+        == "2048 × 1365 · \(PinaxFormat.fileSize(3_800_000)) → \(PinaxFormat.fileSize(342_000))")
+    #expect(
+      ResultCardView(card: cards[3], model: model, state: state).metaText
+        == "1600 × 1000 · \(PinaxFormat.fileSize(284_000))")
+    #expect(
+      ResultCardView(card: cards[4], model: model, state: state).metaText
         == "1200 × 630 · \(PinaxFormat.fileSize(96_000))")
   }
 
@@ -118,7 +134,7 @@ import Testing
     let directory = makeDirectory()
     defer { try? FileManager.default.removeItem(at: directory) }
     let first = DropZonePreviewSamples.pictures(in: directory)
-    #expect(first.urls.count == 4)
+    #expect(first.urls.count == 6)
     for url in first.urls.values {
       #expect(url.deletingLastPathComponent().standardizedFileURL == directory.standardizedFileURL)
       #expect(CGImageSourceCreateWithURL(url as CFURL, nil).flatMap { CGImageSourceGetType($0) } as String? == "public.png")
@@ -174,7 +190,7 @@ import Testing
     preview.show(.dragging, projects: [], projectSlug: nil)
     #expect(preview.state.isDropTargeted)
     #expect(preview.model.draggedFileURLs.count == 3)
-    #expect(preview.model.cards.count == 4)
+    #expect(preview.model.cards.count == 6)
 
     preview.show(.empty, projects: [], projectSlug: nil)
     #expect(!preview.state.isDropTargeted)
@@ -183,7 +199,7 @@ import Testing
 
     preview.show(.results, projects: [], projectSlug: nil)
     #expect(!preview.state.isDropTargeted)
-    #expect(preview.model.cards.count == 4)
+    #expect(preview.model.cards.count == 6)
   }
 
   @Test("Choosing the shown state again builds new cards whose landing counts from then")
@@ -199,7 +215,8 @@ import Testing
     preview.show(.results, projects: [], projectSlug: nil, now: second)
 
     #expect(Set(preview.model.cards.map(\.id)).isDisjoint(with: ids))
-    #expect(preview.model.cards[1].landedAt == second)
+    #expect(preview.model.cards[2].landedAt == second)
+    #expect(preview.model.cards[3].landedAt == second)
   }
 
   // MARK: The mini desktop
@@ -296,7 +313,11 @@ private final class SpyService: DropZoneService, @unchecked Sendable {
 
   func projects() throws -> [Project] { [] }
 
-  func upload(_ fileURL: URL, projectSlug: String?) async throws -> UploadOutcome {
+  func prepare(_ fileURL: URL, projectSlug: String?) async throws -> PreparedDrop {
+    PreparedDrop(fileURL: fileURL, projectSlug: projectSlug)
+  }
+
+  func upload(_ prepared: PreparedDrop, useOriginal: Bool) async throws -> UploadOutcome {
     lock.withLock { uploadCount += 1 }
     throw CancellationError()
   }

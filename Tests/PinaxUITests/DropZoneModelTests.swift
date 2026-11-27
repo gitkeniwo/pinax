@@ -658,7 +658,13 @@ private final class StubUploadService: DropZoneService, @unchecked Sendable {
     ]
   }
 
-  func upload(_ fileURL: URL, projectSlug: String?) async throws -> UploadOutcome {
+  func prepare(_ fileURL: URL, projectSlug: String?) async throws -> PreparedDrop {
+    PreparedDrop(fileURL: fileURL, projectSlug: projectSlug)
+  }
+
+  func upload(_ prepared: PreparedDrop, useOriginal: Bool) async throws -> UploadOutcome {
+    let fileURL = prepared.fileURL
+    let projectSlug = prepared.projectSlug
     let handler = lock.withLock { uploadHandler }
     let outcome = try await handler(fileURL)
     lock.withLock { uploadedSlugs.append(projectSlug) }

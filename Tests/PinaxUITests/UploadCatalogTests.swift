@@ -1,6 +1,7 @@
 import CatalogCore
 import Foundation
 import GRDB
+import ImageIO
 import PinaxUI
 import Testing
 
@@ -166,7 +167,117 @@ import Testing
     }
   }
 
+  @Test("Compression is passed only when the project's switch is on; No Project never compresses")
+  func compressionFollowsProjectSwitch() async throws {
+    try await withUploadDatabase { database in
+      let photo = try #require(makeNoisyJPEGData(width: 1200, height: 900))
+      let file = try writeTempFile(photo)
+      defer { try? FileManager.default.removeItem(at: file) }
+      let uploader = RecordingUploader()
+      let catalog = UploadCatalog(
+        database: database,
+        credentialsLoader: { _ in BackendCredentials(accessKeyID: "key", secretAccessKey: "secret") },
+        uploaderFactory: { _, _ in uploader }
+      )
+      try CatalogConfiguration.setCompression(slug: "blog", in: database) {
+        $0.isEnabled = true
+        $0.options.longestEdge = 600
+      }
+      // Stored options behind a switch that is off change nothing.
+      try CatalogConfiguration.setCompression(slug: "notes", in: database) {
+        $0.isEnabled = false
+        $0.options.longestEdge = 600
+      }
+
+      for slug in ["notes", nil] {
+        let prepared = try await catalog.prepare(file, projectSlug: slug)
+        #expect(prepared.compression == nil, "\(slug ?? "No Project")")
+      }
+
+      let prepared = try await catalog.prepare(file, projectSlug: "blog")
+      let compression = try #require(prepared.compression)
+      #expect(prepared.projectSlug == "blog")
+      #expect(compression.options.longestEdge == 600)
+      #expect(compression.sourceByteSize == Int64(photo.count))
+      #expect(compression.sourceWidth == 1200)
+      #expect(compression.width == 600)
+      #expect(compression.byteSize < compression.sourceByteSize)
+      #expect(uploader.uploadedKeys.isEmpty, "preparing sends nothing")
+
+      let outcome = try await catalog.upload(prepared, useOriginal: false)
+      #expect(outcome.byteSize == compression.byteSize)
+      #expect(outcome.width == 600)
+      #expect(outcome.compression?.sourceByteSize == Int64(photo.count))
+      #expect(uploader.uploadedKeys.count == 1)
+      #expect(try Data(contentsOf: file) == photo, "the dropped file is left as it was")
+    }
+  }
+
+  @Test("useOriginal sends the file as it is, and the composed upload follows the switch")
+  func originalAndComposedUploads() async throws {
+    try await withUploadDatabase { database in
+      let catalog = UploadCatalog(
+        database: database,
+        credentialsLoader: { _ in BackendCredentials(accessKeyID: "key", secretAccessKey: "secret") },
+        uploaderFactory: { _, _ in RecordingUploader() }
+      )
+      try CatalogConfiguration.setCompression(slug: "blog", in: database) {
+        $0.isEnabled = true
+        $0.options.longestEdge = 600
+      }
+      let first = try #require(makeNoisyJPEGData(width: 1200, height: 900))
+      let second = try #require(makeNoisyJPEGData(width: 1000, height: 800))
+      let firstFile = try writeTempFile(first)
+      let secondFile = try writeTempFile(second)
+      defer {
+        try? FileManager.default.removeItem(at: firstFile)
+        try? FileManager.default.removeItem(at: secondFile)
+      }
+
+      let original = try await catalog.upload(
+        catalog.prepare(firstFile, projectSlug: "blog"), useOriginal: true)
+      #expect(original.byteSize == Int64(first.count))
+      #expect(original.compression == nil)
+
+      let composed = try await catalog.upload(secondFile, projectSlug: "blog")
+      #expect(composed.width == 600)
+      #expect(composed.compression?.sourceByteSize == Int64(second.count))
+    }
+  }
+
+  @Test("A drop another service prepared is refused")
+  func foreignPreparedDropRefused() async throws {
+    try await withUploadDatabase { database in
+      let catalog = UploadCatalog(database: database)
+      let foreign = PreparedDrop(
+        fileURL: URL(fileURLWithPath: "/nonexistent/a.jpg"), projectSlug: nil)
+      await #expect(throws: UploadCatalogError.notPrepared) {
+        try await catalog.upload(foreign, useOriginal: false)
+      }
+    }
+  }
+
   // MARK: - Helpers
+
+  /// A JPEG of grey noise: large for its size, so a smaller copy saves far
+  /// more than the compressor asks for.
+  private func makeNoisyJPEGData(width: Int, height: Int) -> Data? {
+    var generator = SystemRandomNumberGenerator()
+    var pixels = (0..<(width * height)).map { _ in UInt8.random(in: 0...255, using: &generator) }
+    let image = pixels.withUnsafeMutableBytes { buffer in
+      CGContext(
+        data: buffer.baseAddress, width: width, height: height, bitsPerComponent: 8,
+        bytesPerRow: width, space: CGColorSpaceCreateDeviceGray(),
+        bitmapInfo: CGImageAlphaInfo.none.rawValue)?.makeImage()
+    }
+    let data = NSMutableData()
+    guard let image,
+      let destination = CGImageDestinationCreateWithData(data, "public.jpeg" as CFString, 1, nil)
+    else { return nil }
+    CGImageDestinationAddImage(
+      destination, image, [kCGImageDestinationLossyCompressionQuality: 0.95] as CFDictionary)
+    return CGImageDestinationFinalize(destination) ? data as Data : nil
+  }
 
   private func withUploadDatabase(_ body: (DatabasePool) async throws -> Void) async throws {
     let (database, directory) = try makeUITestDatabase()

@@ -24,16 +24,20 @@ enum DropZonePreviewStage: CaseIterable, Hashable {
 /// cards are built afresh for each showing, never kept, so a state can be
 /// shown again from the start.
 enum DropZonePreviewSamples {
-  /// The four pictures, in card order.
+  /// The six pictures, in card order.
   enum Picture: String, CaseIterable {
+    case forest = "IMG_2817"
     case sunset = "hero-sunset"
+    case pier = "pier-dawn"
     case map = "trail-map"
     case cover = "cover-2024"
     case photo = "IMG_2041"
 
     var pixelSize: (width: Int, height: Int) {
       switch self {
+      case .forest: (320, 213)
       case .sunset: (320, 240)
+      case .pier: (320, 213)
       case .map: (320, 200)
       case .cover: (320, 168)
       case .photo: (240, 320)
@@ -57,7 +61,7 @@ enum DropZonePreviewSamples {
       .appendingPathComponent("PinaxDropZonePreview", isDirectory: true)
   }
 
-  /// Draws the four pictures and writes each as a PNG in `directory`,
+  /// Draws the pictures and writes each as a PNG in `directory`,
   /// leaving a file that is already there as it is.
   static func pictures(in directory: URL) -> Pictures {
     try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -81,16 +85,27 @@ enum DropZonePreviewSamples {
     guard stage != .empty else { return [] }
     func card(
       _ filename: String, _ picture: Picture, _ phase: DropZoneModel.UploadCard.Phase,
-      landedAt: Date? = nil
+      landedAt: Date? = nil, compression: CardCompression? = nil
     ) -> DropZoneModel.UploadCard {
       DropZoneModel.UploadCard(
         filename: filename,
         fileURL: pictures.urls[picture] ?? URL(fileURLWithPath: filename),
         phase: phase, thumbnail: pictures.images[picture], landedAt: landedAt,
-        projectSlug: projectSlug)
+        projectSlug: projectSlug, compression: compression)
     }
     return [
-      card("hero-sunset.jpg", .sunset, .uploading),
+      card("IMG_2817.jpg", .forest, .compressing),
+      card(
+        "hero-sunset.jpg", .sunset, .uploading,
+        compression: compression(from: 4_100_000, 4032, 3024, to: 298_000, 2048, 1536)),
+      card(
+        "pier-dawn.jpg", .pier,
+        .done(
+          outcome(
+            "pier-dawn.jpg", mime: "image/jpeg", bytes: 342_000, width: 2048, height: 1365,
+            deduplicated: false, now: now)),
+        landedAt: now,
+        compression: compression(from: 3_800_000, 6000, 4000, to: 342_000, 2048, 1365)),
       card(
         "trail-map.png", .map,
         .done(
@@ -106,6 +121,17 @@ enum DropZonePreviewSamples {
             deduplicated: true, now: now))),
       card("IMG_2041.heic", .photo, .failed(failureMessage)),
     ]
+  }
+
+  /// A JPEG recompressed with the default options.
+  private static func compression(
+    from sourceBytes: Int64, _ sourceWidth: Int, _ sourceHeight: Int,
+    to bytes: Int64, _ width: Int, _ height: Int
+  ) -> CardCompression {
+    CardCompression(
+      sourceByteSize: sourceBytes, sourceWidth: sourceWidth, sourceHeight: sourceHeight,
+      sourceMime: "image/jpeg", byteSize: bytes, width: width, height: height,
+      mime: "image/jpeg", options: .default)
   }
 
   /// Dragging shows three images over the results.
@@ -142,8 +168,9 @@ enum DropZonePreviewSamples {
 
   // MARK: Drawing
 
-  /// Gradients and simple shapes: sunset orange and pink, a green-blue
-  /// map, a purple cover, a grey-brown photo.
+  /// Gradients and simple shapes: a wooded hillside, sunset orange and
+  /// pink, a pier at dawn, a green-blue map, a purple cover, a grey-brown
+  /// photo.
   static func draw(_ picture: Picture) -> CGImage? {
     let (width, height) = picture.pixelSize
     guard
@@ -167,6 +194,21 @@ enum DropZonePreviewSamples {
     }
     // CoreGraphics is bottom-up: y = h is the top.
     switch picture {
+    case .forest:
+      wash([0x9fc3d9, 0xd6e4e8], from: CGPoint(x: 0, y: h), to: CGPoint(x: 0, y: h * 0.5))
+      context.setFillColor(rgb(0x6a9457))
+      context.fill(CGRect(x: 0, y: 0, width: w, height: h * 0.57))
+      context.setFillColor(rgb(0x3b6232, 0.85))
+      for x in [0.05, 0.28, 0.55, 0.78] {
+        context.fillEllipse(in: CGRect(x: w * x, y: -h * 0.1, width: w * 0.22, height: h * 0.62))
+      }
+    case .pier:
+      wash([0x7f9cc4, 0xe8b9a6, 0x5f7894], from: CGPoint(x: 0, y: h), to: .zero)
+      context.setFillColor(rgb(0x2f3a4a, 0.85))
+      context.fill(CGRect(x: 0, y: h * 0.34, width: w * 0.72, height: h * 0.05))
+      for x in [0.1, 0.3, 0.5, 0.68] {
+        context.fill(CGRect(x: w * x, y: h * 0.12, width: w * 0.025, height: h * 0.24))
+      }
     case .sunset:
       wash([0xff7a59, 0xff9a6b, 0xf2678e, 0x8e4a8c], from: CGPoint(x: 0, y: h), to: .zero)
       context.setFillColor(rgb(0xffe2a8, 0.95))

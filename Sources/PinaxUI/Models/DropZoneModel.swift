@@ -30,13 +30,16 @@ public final class DropZoneModel: ObservableObject {
   public struct UploadCard: Identifiable {
     public enum Phase: Equatable {
       case waiting
+      /// The upload is being prepared: the file is read, looked up and, when
+      /// its project asks, recompressed.
+      case compressing
       case uploading
       case done(UploadOutcome)
       case failed(String)
 
       public var isPending: Bool {
         switch self {
-        case .waiting, .uploading: return true
+        case .waiting, .compressing, .uploading: return true
         case .done, .failed: return false
         }
       }
@@ -55,6 +58,8 @@ public final class DropZoneModel: ObservableObject {
     /// When this run's upload landed as new bytes (not deduplicated): the
     /// card's brief glow and its "Just now" count from here. nil for every other card.
     public var landedAt: Date?
+    /// Set once a recompressed copy exists, and kept with what was stored.
+    public var compression: CardCompression?
     /// The catalog row behind a card that Show Drop Zone brought up from the
     /// catalog; nil for a card dropped in this run.
     public let catalogItem: CatalogAssetItem?
@@ -71,7 +76,7 @@ public final class DropZoneModel: ObservableObject {
     /// A card made up whole, phase and all: the settings preview's samples.
     init(
       filename: String, fileURL: URL, phase: Phase, thumbnail: CGImage?,
-      landedAt: Date? = nil, projectSlug: String?
+      landedAt: Date? = nil, projectSlug: String?, compression: CardCompression? = nil
     ) {
       self.id = UUID()
       self.fileURL = fileURL
@@ -80,6 +85,7 @@ public final class DropZoneModel: ObservableObject {
       self.thumbnail = thumbnail
       self.landedAt = landedAt
       self.projectSlug = projectSlug
+      self.compression = compression
       self.catalogItem = nil
     }
 
@@ -422,6 +428,7 @@ public final class DropZoneModel: ObservableObject {
       case .failed = cards[index].phase
     else { return }
     uploadBatchSize += 1
+    cards[index].compression = nil
     cards[index].phase = .waiting
     restartCountdown()
     enqueueUploads(for: [cards[index]])
@@ -476,10 +483,12 @@ public final class DropZoneModel: ObservableObject {
     let items = targets.map { (id: $0.id, fileURL: $0.fileURL, projectSlug: $0.projectSlug) }
     Task { [weak self] in
       await boundedForEach(items) { item in
-        await MainActor.run { self?.setPhase(.uploading, for: item.id) }
+        await MainActor.run { self?.setPhase(.compressing, for: item.id) }
         let phase: UploadCard.Phase
         do {
-          phase = .done(try await service.upload(item.fileURL, projectSlug: item.projectSlug))
+          let prepared = try await service.prepare(item.fileURL, projectSlug: item.projectSlug)
+          await MainActor.run { self?.beginUploading(prepared.compression, for: item.id) }
+          phase = .done(try await service.upload(prepared, useOriginal: false))
         } catch {
           phase = .failed(Self.failureMessage(error))
         }
@@ -512,11 +521,26 @@ public final class DropZoneModel: ObservableObject {
     cards[index].phase = phase
   }
 
+  /// The copy and the phase land together, so the uploading card never
+  /// shows without its sizes.
+  private func beginUploading(_ compression: CardCompression?, for id: UUID) {
+    guard let index = cards.firstIndex(where: { $0.id == id }) else { return }
+    var card = cards[index]
+    card.compression = compression
+    card.phase = .uploading
+    cards[index] = card
+  }
+
   private func settle(_ phase: UploadCard.Phase, for id: UUID) {
     // Read before setPhase: the last card settling ends the batch, which
     // resets the flag.
     if case .done = phase { batchHasSuccess = true }
     let batchSucceeded = batchHasSuccess
+    // What was stored has the last word: a reused copy brings its sizes, a
+    // reused original takes them away.
+    if case .done(let outcome) = phase, let index = cards.firstIndex(where: { $0.id == id }) {
+      cards[index].compression = CardCompression(outcome: outcome)
+    }
     setPhase(phase, for: id)
     if case .failed = phase { onUploadFailed?() }
     if case .done(let outcome) = phase, !outcome.deduplicated,
@@ -548,6 +572,7 @@ public final class DropZoneModel: ObservableObject {
     let dropped = cards[index]
     var existing = cards[existingIndex]
     existing.phase = .done(outcome)
+    existing.compression = dropped.compression
     existing.projectSlug = dropped.projectSlug
     existing.moveError = nil
     existing.landedAt = nil

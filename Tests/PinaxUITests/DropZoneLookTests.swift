@@ -201,7 +201,12 @@ private final class LookUploadService: DropZoneService, @unchecked Sendable {
     ]
   }
 
-  func upload(_ fileURL: URL, projectSlug: String?) async throws -> UploadOutcome {
+  func prepare(_ fileURL: URL, projectSlug: String?) async throws -> PreparedDrop {
+    PreparedDrop(fileURL: fileURL, projectSlug: projectSlug)
+  }
+
+  func upload(_ prepared: PreparedDrop, useOriginal: Bool) async throws -> UploadOutcome {
+    let fileURL = prepared.fileURL
     let name = fileURL.lastPathComponent
     return UploadOutcome(
       sha256: String(repeating: "0c", count: 32), key: "blog/\(name)",

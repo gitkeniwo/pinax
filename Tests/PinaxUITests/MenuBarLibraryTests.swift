@@ -610,7 +610,12 @@ private struct HalfFailingUpload: DropZoneService {
 
   func projects() throws -> [Project] { [] }
 
-  func upload(_ fileURL: URL, projectSlug: String?) async throws -> UploadOutcome {
+  func prepare(_ fileURL: URL, projectSlug: String?) async throws -> PreparedDrop {
+    PreparedDrop(fileURL: fileURL, projectSlug: projectSlug)
+  }
+
+  func upload(_ prepared: PreparedDrop, useOriginal: Bool) async throws -> UploadOutcome {
+    let fileURL = prepared.fileURL
     let name = fileURL.lastPathComponent
     if name.hasPrefix("bad") { throw Refused() }
     return UploadOutcome(

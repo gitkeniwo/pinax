@@ -227,6 +227,10 @@ public enum DesignMetrics {
     /// wide; the "already in library" copy sits 4 pt up and right. The
     /// status layer never reaches further out than `statusOutset`.
     public static let ringWidth: CGFloat = 2.4
+    /// The compressing ring's dots, centre to centre, on a List thumbnail and
+    /// on a Shelf one.
+    public static let ringDotPitch: CGFloat = 5
+    public static let ringDotPitchLarge: CGFloat = 5.5
     /// The ring's path, outside the image: its stroke's outer edge lands
     /// on `statusOutset`.
     public static var ringOutset: CGFloat { statusOutset - ringWidth / 2 }

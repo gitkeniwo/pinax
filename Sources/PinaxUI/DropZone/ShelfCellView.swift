@@ -82,16 +82,22 @@ struct ShelfCellView: View {
         .help(status.help ?? "")
     } else if status.kind == .uploaded {
       TimelineView(.periodic(from: .now, by: 30)) { context in
-        Text(DropZoneCardStatus(card: card, now: context.date).shelfText)
-          .foregroundStyle(palette.secondary)
-          .pinaxCaption()
-          .help(status.help ?? "")
+        let current = DropZoneCardStatus(card: card, now: context.date)
+        // The sizes do not fit a cell: they are in the tooltip. Beside a
+        // long project name even the time gives way to the percentage.
+        ViewThatFits(in: .horizontal) {
+          current.shelfWords(saving: palette.done).lineLimit(1)
+          current.shelfWords(saving: palette.done, short: true).lineLimit(1)
+        }
+        .foregroundStyle(palette.secondary)
+        .pinaxCaption()
+        .help(current.shelfHelp ?? "")
       }
     } else {
       Text(status.shelfText)
         .foregroundStyle(palette.secondary)
         .pinaxCaption()
-        .help(status.help ?? "")
+        .help(status.shelfHelp ?? "")
     }
   }
 
