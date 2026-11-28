@@ -156,16 +156,55 @@ import Testing
       fixture.settings.commandTest(of: Self.command, inProject: "blog")?.text
         == "Exited with status 2")
 
-    fixture.runner.failure = .commandTimedOut(label: "command", seconds: 60)
+    fixture.runner.failure = .commandTimedOut(label: "command", seconds: 120)
     await fixture.usageSync.testCommand(project: "blog", source: Self.command, presenter: .settings)
-    #expect(
-      fixture.settings.commandTest(of: Self.command, inProject: "blog")?.text
-        == CommandSourceError.commandTimedOut(label: "command", seconds: 60).description)
+    let timedOut = try #require(
+      fixture.settings.commandTest(of: Self.command, inProject: "blog"))
+    #expect(timedOut.text == "Did not finish within 120 seconds.")
+    #expect(CommandTestResult.help(timedOut) == "Did not finish within 120 seconds.")
+    #expect(CommandTestResult.lineLimit(timedOut) == 2)
 
     // A result is of the command as it ran.
     var edited = Self.command
     edited.command = "export-usage --all"
     #expect(fixture.settings.commandTest(of: edited, inProject: "blog") == nil)
+  }
+
+  @Test("A failure beside Test Run says what went wrong without naming the source")
+  func failureWording() {
+    let wording: [(CommandSourceError, String, String)] = [
+      (
+        .commandNotAllowed(label: "cms"),
+        "The command has not been allowed to run.", "The command has not been allowed to run."
+      ),
+      (
+        .workingDirectoryNotFound(label: "cms", path: "/work/gone"),
+        "Working directory not found: /work/gone", "Working directory not found: /work/gone"
+      ),
+      (
+        .commandFailed(label: "cms", status: 1, stderrTail: "first\nlast\n"),
+        "Exited with status 1: last", "Exited with status 1\nfirst\nlast\n"
+      ),
+      (
+        .commandTimedOut(label: "cms", seconds: 120),
+        "Did not finish within 120 seconds.", "Did not finish within 120 seconds."
+      ),
+      (
+        .commandOutputTooLarge(label: "cms"),
+        "Printed too much output.", "Printed too much output."
+      ),
+      (
+        .commandOutputInvalid(label: "cms", field: "refs"),
+        "Output is invalid at 'refs'.", "Output is invalid at 'refs'."
+      ),
+    ]
+    for (error, line, detail) in wording {
+      #expect(CommandTest.failure(error) == .failed(line: line, detail: detail))
+    }
+    // The command line's words are as they were.
+    #expect(
+      CommandSourceError.commandOutputInvalid(label: "cms", field: "refs").description
+        == "Source 'cms' command output is invalid at 'refs'.")
   }
 
   @Test("Both windows carry the confirmation, and each shows only what it asked for")
