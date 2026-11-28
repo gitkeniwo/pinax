@@ -69,6 +69,26 @@ Changes to Pinax must keep these rules:
 
 The package resolves GRDB 7.11.1 and Swift Argument Parser 1.8.2 in `Package.resolved`.
 
+## Command-line usage
+
+| Task | Commands |
+|---|---|
+| Set up | `init`, `backend add`, `project add`, `project set`, `project source add` |
+| Upload and link | `upload`, `url`, `get` |
+| Find | `ls`, `show`, `used-in`, `stats` |
+| Curate | `tag`, `label`, `favorite`, `note`, `archive`, `unarchive`, `project link\|unlink\|move` |
+| Delete | `delete` (archived assets only; plan first, then `--confirm`) |
+| Track usage | `usage scan`, `usage report`, `orphans`, `externals` |
+| Move domains | `backend set-prefix`, `backend migrate-domain`, `rewrite`, `runs` |
+| Maintain | `doctor`, `backup`, `restore`, `reindex`, `import` |
+
+Most commands take `--format json` and exit with a fixed status code. Every command and flag: [docs/CLI.md](docs/CLI.md). For AI agents: [skills/pinax/SKILL.md](skills/pinax/SKILL.md).
+
+```sh
+pinax delete 431ced --dry-run   # print the plan
+pinax delete 431ced --confirm   # delete the catalog row and the object
+```
+
 ## Configure a backend
 
 Create the database:
