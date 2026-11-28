@@ -365,6 +365,8 @@ struct StatusThumbnail: View {
       .accessibilityElement(children: .contain)
       .accessibilityLabel(status.accessibilityLabel)
       .preference(key: DropZoneMotionKey.self, value: [card.id: motion])
+      // A new phase cross-fades the status; the card itself stays put.
+      .animation(DropZonePanelMotion.status(reducesMotion: reducesMotion), value: status.kind)
       .onChange(of: status.kind, initial: true) { _, kind in
         if kind == .uploading, uploadStart == nil { uploadStart = Date() }
       }
@@ -854,9 +856,13 @@ struct ResultCardView: View {
           .truncationMode(.middle)
           .help(card.fileURL.path)
           .dropZoneLayout(.filename, card: card.id)
-        statusLine
-          .dropZoneLayout(.statusText, card: card.id)
-        metaRow
+        Group {
+          statusLine
+            .dropZoneLayout(.statusText, card: card.id)
+          metaRow
+        }
+        .animation(
+          DropZonePanelMotion.status(reducesMotion: state.reducesMotion), value: status.kind)
         actionRow
           .padding(.leading, -M.actionRowLead)
           .dropZoneLayout(.buttons, card: card.id)

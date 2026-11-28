@@ -37,6 +37,18 @@ public struct DropZoneView: View {
     case content = 0, scrim, viewfinder, dragContent, header
   }
 
+  private var motion: DropZonePanelMotion.Type { DropZonePanelMotion.self }
+  private var reducesMotion: Bool { state.reducesMotion }
+
+  /// The surface's motion as this body wires it, for a hosted test.
+  private var motionReport: DropZonePanelMotion.Report {
+    DropZonePanelMotion.Report(
+      dragFades: motion.drag(reducesMotion: reducesMotion) != nil,
+      cardsSlideIn: motion.cardInsertion(index: 0, reducesMotion: reducesMotion) != nil,
+      statusFades: motion.status(reducesMotion: reducesMotion) != nil,
+      reviewBarSlides: motion.reviewBar(showing: true, reducesMotion: reducesMotion) != nil)
+  }
+
   public var body: some View {
     ZStack(alignment: .top) {
       layer(.content).zIndex(Layer.content.rawValue)
@@ -45,6 +57,8 @@ public struct DropZoneView: View {
       layer(.dragContent).zIndex(Layer.dragContent.rawValue)
       layer(.header).zIndex(Layer.header.rawValue)
     }
+    // A drag entering or leaving: blur, saturation, fade and scrim together.
+    .animation(motion.drag(reducesMotion: reducesMotion), value: state.isDropTargeted)
     .foregroundStyle(palette.primary)
     .tint(palette.accent)
     // Settings ▸ Size: the panel sets the size; the root fills it.
@@ -55,6 +69,7 @@ public struct DropZoneView: View {
       tint: palette.panelTint, rim: palette.panelRim)
     .overlay(alignment: .topLeading) { preview }
     .coordinateSpace(name: Self.space)
+    .preference(key: DropZonePanelMotionKey.self, value: motionReport)
     .modifier(PanelHookup(model: model, state: state, isActive: !isPreview))
   }
 
@@ -73,6 +88,9 @@ public struct DropZoneView: View {
           }
           .onPreferenceChange(DropZoneMotionKey.self) { [state] motions in
             MainActor.assumeIsolated { state.motions = motions }
+          }
+          .onPreferenceChange(DropZonePanelMotionKey.self) { [state] report in
+            MainActor.assumeIsolated { state.panelMotion = report }
           }
           .dropDestination(for: URL.self) { urls, _ in
             // The keys down as the drop lands: ⇧ holds it for review.
@@ -101,13 +119,14 @@ public struct DropZoneView: View {
           .opacity(state.isDropTargeted ? DesignMetrics.dropZone.dragContentOpacity : 1)
       }
     case .scrim:
-      if state.isDropTargeted { dragScrim }
+      if state.isDropTargeted { dragScrim.transition(.opacity) }
     case .viewfinder:
       if model.cards.isEmpty || state.isDropTargeted {
         belowHeader { viewfinder.dropZoneLayout(.viewfinder) }
+          .transition(.opacity)
       }
     case .dragContent:
-      if state.isDropTargeted { belowHeader { dragOverlayContent } }
+      if state.isDropTargeted { belowHeader { dragOverlayContent }.transition(.opacity) }
     case .header:
       header
         .frame(height: DesignMetrics.dropZone.headerHeight)
@@ -142,8 +161,12 @@ public struct DropZoneView: View {
             .padding(.horizontal, -DesignMetrics.dropZone.panelInset)
             .padding(.bottom, -DesignMetrics.dropZone.panelInset)
             .dropZoneLayout(.reviewBar)
+            .transition(motion.reviewBarTransition)
         }
       }
+      .animation(
+        motion.reviewBar(showing: model.isReviewing, reducesMotion: reducesMotion),
+        value: model.isReviewing)
     }
   }
 
@@ -251,10 +274,12 @@ public struct DropZoneView: View {
   private var cardsList: some View {
     ScrollView {
       LazyVStack(spacing: DesignMetrics.spacing.s) {
-        ForEach(model.cards) { card in
+        ForEach(Array(model.cards.enumerated()), id: \.element.id) { index, card in
           ResultCardView(card: card, model: model, state: state)
+            .transition(motion.cardTransition(index: index, reducesMotion: reducesMotion))
         }
       }
+      .animation(motion.cardShift(reducesMotion: reducesMotion), value: model.cards.map(\.id))
     }
     .scrollIndicators(.hidden)
     .frame(maxHeight: .infinity)
@@ -270,10 +295,12 @@ public struct DropZoneView: View {
           count: 2),
         spacing: DesignMetrics.dropZone.shelfRowGap
       ) {
-        ForEach(model.cards) { card in
+        ForEach(Array(model.cards.enumerated()), id: \.element.id) { index, card in
           ShelfCellView(card: card, model: model, state: state)
+            .transition(motion.cardTransition(index: index, reducesMotion: reducesMotion))
         }
       }
+      .animation(motion.cardShift(reducesMotion: reducesMotion), value: model.cards.map(\.id))
       // Room inside the scroll clip for the status drawn outside each
       // image (the ring, the in-library copy); the scroll area grows by
       // the same so the cells stay where they were.
@@ -335,6 +362,9 @@ final class DropZoneViewState: ObservableObject {
   /// Each card's status motion as drawn (`DropZoneMotionKey`); like
   /// `layoutFrames`, for a test only.
   var motions: [UUID: DropZoneMotion] = [:]
+  /// The surface's own motion as drawn (`DropZonePanelMotionKey`); for a
+  /// test only.
+  var panelMotion: DropZonePanelMotion.Report?
   /// Where each part of the panel last landed (`DropZoneLayoutKey`). Not
   /// published — nothing redraws from it; a test reads it from the panel
   /// the app itself hosts.
