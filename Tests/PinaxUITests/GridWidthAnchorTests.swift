@@ -200,11 +200,9 @@ import Testing
   func roundTripKeepsTheTopRow(_ grouped: Bool, _ scroller: GridScrollerCase) async throws {
     let hosted = try await host(grouped: grouped, scroller: scroller)
     defer { hosted.close() }
-    hosted.scroll(to: hosted.maximum * 0.45)
-    await spin(0.6)
-    hosted.scroll(to: hosted.offset + 1)
-    await spin(0.6)
-    await hosted.settle()
+    // Not one jump: the absolute offset only comes back if the rows above
+    // were laid out, so their heights are not estimates.
+    await scrollDown(hosted, to: hosted.maximum * 0.45)
     let start = try #require(hosted.topRow, "no row on the top edge")
     let startOffset = hosted.offset
 

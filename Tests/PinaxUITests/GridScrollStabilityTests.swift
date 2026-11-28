@@ -245,9 +245,11 @@ enum GridScrollerCase: String, CaseIterable, Sendable, CustomTestStringConvertib
         let around = expected.insetBy(dx: -ring, dy: -ring)
         let leaves = hosted.allViews().filter { $0.subviews.isEmpty && !$0.isHidden }
           .map { hosted.inScrollSpace($0) }
+        // Edge by edge: a 1x display snaps each edge to a whole point, so
+        // a size can be off by more than either edge is.
         let hit = leaves.contains {
           abs($0.minX - around.minX) <= 0.5 && abs($0.minY - around.minY) <= 0.5
-            && abs($0.width - around.width) <= 0.5 && abs($0.height - around.height) <= 0.5
+            && abs($0.maxX - around.maxX) <= 0.5 && abs($0.maxY - around.maxY) <= 0.5
         }
         #expect(
           hit,
