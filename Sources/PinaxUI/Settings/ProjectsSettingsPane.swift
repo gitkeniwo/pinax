@@ -2,6 +2,8 @@ import AppKit
 import CatalogCore
 import SwiftUI
 
+private typealias Metrics = DesignMetrics.settings
+
 /// Per-project backend and key prefix. The list shows every project
 /// with its name, slug, key prefix, and backend; the editor below writes
 /// through `CatalogConfiguration` — and only on an explicit commit (Set, or a
@@ -242,12 +244,9 @@ struct ProjectCompressionSection: View {
     edge.map { "\($0) px" } ?? dontResize
   }
 
+  /// "85%".
   static func qualityLabel(_ quality: CompressionQuality) -> String {
-    switch quality {
-    case .high: "High"
-    case .medium: "Medium"
-    case .small: "Small"
-    }
+    quality.description
   }
 
   /// The menu's sizes, plus a stored one that is not among them (set from
@@ -303,13 +302,7 @@ struct ProjectCompressionSection: View {
           }
           SettingsRowDivider()
           SettingsRow(Self.qualityTitle) {
-            SettingsMenuPicker(Self.qualityTitle, selection: quality) {
-              ForEach(CompressionQuality.allCases, id: \.self) { quality in
-                Text(Self.qualityLabel(quality)).tag(quality)
-              }
-            } label: {
-              Text(Self.qualityLabel(compression.options.quality))
-            }
+            SettingsQualitySlider(Self.qualityTitle, quality: quality)
           }
           SettingsRowDivider()
           SettingsRow(Self.metadataTitle, subtitle: Self.metadataNote) {
@@ -317,8 +310,99 @@ struct ProjectCompressionSection: View {
           }
         }
         .disabled(!compression.isEnabled)
-        .opacity(compression.isEnabled ? 1 : DesignMetrics.settings.disabledOpacity)
+        .opacity(compression.isEnabled ? 1 : Metrics.disabledOpacity)
       }
+    }
+  }
+}
+
+/// The Quality row's control: a slider over 40–100 in steps of 1, with tick
+/// marks where the three named steps of earlier versions sat, and the value
+/// as "85%" after it. A drag moves only the knob and the number; the value
+/// is written once, when the knob is let go. A keyboard or accessibility
+/// step writes at once.
+struct SettingsQualitySlider: View {
+  let title: String
+  @Binding var quality: CompressionQuality
+  /// The knob's value mid-drag; nil otherwise, so the knob shows the stored
+  /// value.
+  @State private var dragValue: Double?
+  @State private var isDragging = false
+
+  init(_ title: String, quality: Binding<CompressionQuality>) {
+    self.title = title
+    self._quality = quality
+  }
+
+  static let bounds = Double(CompressionQuality.range.lowerBound)...Double(CompressionQuality.range.upperBound)
+
+  /// Where a tick for `percent` sits along a track `width` wide, measured
+  /// from the slider's leading edge.
+  static func tickOffset(_ percent: Int, width: CGFloat) -> CGFloat {
+    let travel = width - 2 * Metrics.qualityTickInset
+    let fraction = (Double(percent) - bounds.lowerBound) / (bounds.upperBound - bounds.lowerBound)
+    return Metrics.qualityTickInset + travel * fraction
+  }
+
+  /// The quality a slider value stands for: rounded to a whole percent.
+  static func quality(forSliderValue value: Double) -> CompressionQuality {
+    CompressionQuality(Int(value.rounded()))
+  }
+
+  private var shown: CompressionQuality {
+    dragValue.map(Self.quality(forSliderValue:)) ?? quality
+  }
+
+  private var sliderValue: Binding<Double> {
+    Binding(
+      get: { dragValue ?? Double(quality.percent) },
+      set: { value in
+        if isDragging {
+          dragValue = value
+        } else {
+          commit(value)
+        }
+      })
+  }
+
+  private func commit(_ value: Double) {
+    let next = Self.quality(forSliderValue: value)
+    if next != quality { quality = next }
+  }
+
+  var body: some View {
+    HStack(spacing: Metrics.qualityValueSpacing) {
+      Slider(value: sliderValue, in: Self.bounds, step: 1) { editing in
+        isDragging = editing
+        if !editing, let dragValue {
+          self.dragValue = nil
+          commit(dragValue)
+        }
+      }
+      .labelsHidden()
+      .tint(PinaxPalette.accentFill)
+      .controlSize(.small)
+      .frame(width: Metrics.qualitySliderWidth)
+      .overlay(alignment: .bottomLeading) {
+        ZStack(alignment: .leading) {
+          ForEach(CompressionQuality.ticks, id: \.self) { percent in
+            Rectangle()
+              .fill(.tertiary)
+              .frame(width: Metrics.qualityTickWidth, height: Metrics.qualityTickHeight)
+              .offset(
+                x: Self.tickOffset(percent, width: Metrics.qualitySliderWidth)
+                  - Metrics.qualityTickWidth / 2)
+          }
+        }
+        .offset(y: Metrics.qualityTickHeight)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+      }
+      .accessibilityLabel(title)
+      .accessibilityValue(shown.description)
+      Text(shown.description)
+        .monospacedDigit()
+        .frame(width: Metrics.qualityValueWidth, alignment: .trailing)
     }
   }
 }

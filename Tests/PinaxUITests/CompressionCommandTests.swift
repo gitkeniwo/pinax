@@ -57,7 +57,7 @@ import Testing
     #expect(settings.compression.isEnabled)
     #expect(
       settings.compression.options
-        == CompressionOptions(longestEdge: nil, quality: .small, removesMetadata: false))
+        == CompressionOptions(longestEdge: nil, quality: 60, removesMetadata: false))
 
     let more = try parse(
       ["project", "set", "--slug", "blog", "--name", "Weblog", "--longest-edge", "2560",
@@ -69,7 +69,7 @@ import Testing
     #expect(settings.compression.isEnabled)
     #expect(
       settings.compression.options
-        == CompressionOptions(longestEdge: 2560, quality: .small, removesMetadata: true))
+        == CompressionOptions(longestEdge: 2560, quality: 60, removesMetadata: true))
 
     let off = try parse(["project", "set", "--slug", "blog", "--no-compress"], as: ProjectSet.self)
     _ = try off.perform(in: database)
@@ -82,10 +82,25 @@ import Testing
     #expect(throws: CatalogConfigurationError.self) { try nothing.perform(in: database) }
   }
 
+  @Test("project set takes a quality from 40 to 100 or an old name, and stores the number")
+  func projectSetQuality() throws {
+    let (database, directory) = try makeUITestDatabase()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    for (argument, percent) in [("40", 40), ("100", 100), ("72", 72), ("high", 85), ("medium", 75), ("small", 60)] {
+      let command = try parse(["project", "set", "--slug", "blog", "--quality", argument], as: ProjectSet.self)
+      _ = try command.perform(in: database)
+      let settings = try CatalogConfiguration.projectSettings(slug: "blog", in: database)
+      #expect(settings.compression.options.quality.percent == percent, "\(argument)")
+    }
+    let help = ProjectSet.helpMessage()
+    #expect(help.contains("40 to 100") && help.contains("(default 85)"), "\(help)")
+  }
+
   @Test("project set rejects a bad longest edge or quality")
   func projectSetRejects() {
     for arguments in [
       ["--longest-edge", "0"], ["--longest-edge", "big"], ["--quality", "best"],
+      ["--quality", "39"], ["--quality", "101"], ["--quality", "85.5"], ["--quality", "-1"],
     ] {
       #expect(throws: (any Error).self) {
         try Pinax.parseAsRoot(["project", "set", "--slug", "blog"] + arguments)

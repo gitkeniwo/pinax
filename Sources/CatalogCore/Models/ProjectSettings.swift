@@ -77,9 +77,7 @@ public struct ProjectCompression: Equatable, Sendable {
       options.longestEdge = number.intValue
     default: break
     }
-    if let raw = object["quality"] as? String, let value = CompressionQuality(rawValue: raw) {
-      options.quality = value
-    }
+    if let value = CompressionQuality(json: object["quality"]) { options.quality = value }
     if let value = object["removeMetadata"] as? Bool { options.removesMetadata = value }
   }
 
@@ -87,7 +85,7 @@ public struct ProjectCompression: Equatable, Sendable {
     [
       "enabled": isEnabled,
       "longestEdge": options.longestEdge.map { $0 as Any } ?? NSNull(),
-      "quality": options.quality.rawValue,
+      "quality": options.quality.percent,
       "removeMetadata": options.removesMetadata,
     ]
   }

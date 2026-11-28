@@ -462,7 +462,10 @@ public final class UploadPipeline: Sendable {
         .fetchAll(db)
     }
     let fingerprint = options.fingerprint
-    return copies.first { UploadCompressionFacts.fingerprint(inMeta: $0.meta) == fingerprint }
+    return copies.first {
+      UploadCompressionFacts.fingerprint(inMeta: $0.meta)
+        .map(CompressionOptions.normalizedFingerprint) == fingerprint
+    }
       .map(PreparedUpload.Match.compressedCopy)
   }
 

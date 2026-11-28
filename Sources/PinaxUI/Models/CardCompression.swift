@@ -74,11 +74,11 @@ public struct CardCompression: Equatable, Sendable {
     return change < 0 ? "−\(min(percent, 99))%" : "+\(percent)%"
   }
 
-  /// "Longest edge 2048 · High · metadata removed"
+  /// "Longest edge 2048 · Quality 85% · metadata removed"
   var settingsSummary: String {
     [
       options.longestEdge.map { "Longest edge \($0)" } ?? "Not resized",
-      options.quality.rawValue.capitalized,
+      "Quality \(options.quality)",
       options.removesMetadata ? "metadata removed" : "metadata kept",
     ].joined(separator: " · ")
   }

@@ -57,4 +57,15 @@ extension DesignMetrics.settings {
   public static let popUpIndicatorWidth: CGFloat = 16
   public static let popUpIndicatorHeight: CGFloat = 18
   public static let popUpIndicatorRadius: CGFloat = 5
+
+  /// Projects ▸ Compression ▸ Quality: a small slider 140 wide, its tick
+  /// marks 1 × 4 under the track, set in by half the small knob (20 wide)
+  /// so each sits under the knob's center at its value; then, 8 after it
+  /// (tier `s`), the percentage in a 36 wide column so the row never shifts.
+  public static let qualitySliderWidth: CGFloat = 140
+  public static let qualityTickInset: CGFloat = 10
+  public static let qualityTickWidth: CGFloat = 1
+  public static let qualityTickHeight: CGFloat = 4
+  public static let qualityValueSpacing = DesignMetrics.spacing.s
+  public static let qualityValueWidth: CGFloat = 36
 }

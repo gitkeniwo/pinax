@@ -62,7 +62,7 @@ import Testing
     let meta = try #require(
       try JSONSerialization.jsonObject(with: Data(asset.meta.utf8)) as? [String: Any])
     let record = try #require(meta["compression"] as? [String: Any])
-    #expect(record["fingerprint"] as? String == "e2048-qhigh-m1")
+    #expect(record["fingerprint"] as? String == "e2048-q85-m1")
     #expect(record["source_bytes"] as? Int == Self.photoPNG.count)
     #expect(record["source_mime"] as? String == "image/png")
   }
@@ -134,6 +134,39 @@ import Testing
     #expect(try fixture.projectLinks() == 2)
   }
 
+  @Test("A copy recorded with an old quality name is reused for the same percentage")
+  func reusesCopyWithLegacyQuality() async throws {
+    let fixture = try CompressionFixture()
+    defer { fixture.remove() }
+    let url = try fixture.write(Self.photoPNG, as: "photo.png")
+    let pipeline = fixture.pipeline()
+    let first = try await pipeline.upload(fileURL: url, date: fixture.date, compression: .default)
+
+    // Rewrite the record the way earlier versions wrote it.
+    let stored = try #require(try fixture.assets().first)
+    let legacy = stored.meta
+      .replacingOccurrences(of: "e2048-q85-m1", with: "e2048-qhigh-m1")
+      .replacingOccurrences(of: #""quality":85"#, with: #""quality":"high""#)
+    #expect(legacy.contains("qhigh") && legacy.contains(#""quality":"high""#), "\(legacy)")
+    try await fixture.database.write { db in
+      try db.execute(sql: "UPDATE asset SET meta = ? WHERE id = ?", arguments: [legacy, stored.id])
+    }
+    let reread = try #require(try fixture.assets().first)
+    #expect(UploadCompressionFacts(asset: reread)?.options == .default)
+
+    let prepared = try await pipeline.prepare(
+      fileURL: url, compression: CompressionOptions(quality: 85))
+    guard case .compressedCopy(let match) = prepared.match else {
+      Issue.record("Expected the old copy to match, got \(String(describing: prepared.match))")
+      return
+    }
+    #expect(match.sha256 == first.sha256)
+
+    // Any other percentage is a new copy.
+    let other = try await pipeline.prepare(fileURL: url, compression: CompressionOptions(quality: 84))
+    #expect(other.match == nil)
+  }
+
   @Test("Other options make a new copy")
   func otherOptionsUploadAgain() async throws {
     let fixture = try CompressionFixture()
@@ -142,7 +175,7 @@ import Testing
     let pipeline = fixture.pipeline()
     let first = try await pipeline.upload(fileURL: url, date: fixture.date, compression: .default)
 
-    let smaller = CompressionOptions(longestEdge: 1600, quality: .medium)
+    let smaller = CompressionOptions(longestEdge: 1600, quality: 75)
     let second = try await pipeline.upload(fileURL: url, date: fixture.date, compression: smaller)
 
     #expect(!second.deduplicated)
@@ -360,7 +393,7 @@ import Testing
     let full = ProjectSettings(
       meta: #"{"compression": {"enabled": true, "longestEdge": null, "quality": "small", "removeMetadata": false}}"#)
     #expect(full.compression.isEnabled)
-    #expect(full.compression.options == CompressionOptions(longestEdge: nil, quality: .small, removesMetadata: false))
+    #expect(full.compression.options == CompressionOptions(longestEdge: nil, quality: 60, removesMetadata: false))
     #expect(full.compression.effectiveOptions == full.compression.options)
 
     let wrong = ProjectSettings(
@@ -369,6 +402,33 @@ import Testing
 
     let partial = ProjectSettings(meta: #"{"compression": {"enabled": true, "longestEdge": 1600}}"#)
     #expect(partial.compression.options == CompressionOptions(longestEdge: 1600))
+  }
+
+  @Test("A quality is stored as a whole number; old names and numbers both read back")
+  func qualityStoredAsNumber() throws {
+    let number = ProjectSettings(meta: #"{"compression": {"enabled": true, "quality": 72}}"#)
+    #expect(number.compression.options.quality == 72)
+    let legacy = ProjectSettings(meta: #"{"compression": {"enabled": true, "quality": "medium"}}"#)
+    #expect(legacy.compression.options.quality == 75)
+    for outside in ["30", "101", "72.5"] {
+      let settings = ProjectSettings(meta: #"{"compression": {"enabled": true, "quality": "# + outside + "}}")
+      #expect(settings.compression.options.quality == .default, "\(outside)")
+    }
+
+    let fixture = try CompressionFixture()
+    defer { fixture.remove() }
+    try CatalogConfiguration.setCompression(slug: "blog", in: fixture.database) {
+      $0.options.quality = 72
+    }
+    let meta = try fixture.database.read { db in
+      try String.fetchOne(db, sql: "SELECT meta FROM project WHERE slug = 'blog'")
+    }
+    let metaText = try #require(meta)
+    let object = try #require(
+      try JSONSerialization.jsonObject(with: Data(metaText.utf8)) as? [String: Any])
+    let compression = try #require(object["compression"] as? [String: Any])
+    let stored = try #require(compression["quality"] as? NSNumber)
+    #expect(stored.intValue == 72 && !CFNumberIsFloatType(stored))
   }
 
   @Test("setCompression writes one key and keeps the others")
@@ -380,12 +440,12 @@ import Testing
     let settings = try CatalogConfiguration.setCompression(slug: "blog", in: fixture.database) {
       $0.isEnabled = true
       $0.options.longestEdge = nil
-      $0.options.quality = .medium
+      $0.options.quality = 75
     }
 
     #expect(settings.usageTracking == .notTracked)
     #expect(settings.compression.isEnabled)
-    #expect(settings.compression.options == CompressionOptions(longestEdge: nil, quality: .medium))
+    #expect(settings.compression.options == CompressionOptions(longestEdge: nil, quality: 75))
     let reread = try CatalogConfiguration.projectSettings(slug: "blog", in: fixture.database)
     #expect(reread == settings)
 
@@ -405,10 +465,10 @@ import Testing
     let plain = fixture.project
     try CatalogConfiguration.setCompression(slug: "blog", in: fixture.database) {
       $0.isEnabled = true
-      $0.options.quality = .small
+      $0.options.quality = 60
     }
     let enabled = try #require(try CatalogConfiguration.projects(in: fixture.database).first)
-    let small = CompressionOptions(quality: .small)
+    let small = CompressionOptions(quality: 60)
 
     #expect(CompressionChoice.project.options(for: nil) == nil)
     #expect(CompressionChoice.project.options(for: plain) == nil)

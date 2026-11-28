@@ -334,8 +334,11 @@ struct ProjectSet: ParsableCommand {
   var compress: Bool?
   @Option(help: "Longest edge of a compressed copy in pixels, or none to keep the size.")
   var longestEdge: LongestEdgeArgument?
-  @Option(help: "Quality of a compressed copy: high, medium or small.")
-  var quality: QualityArgument?
+  @Option(
+    help:
+      "Quality of a compressed copy, 40 to 100 (default 85); high, medium and small read as 85, 75 and 60."
+  )
+  var quality: CompressionQuality?
   @Flag(help: "Whether a compressed copy drops the original's metadata, location included.")
   var metadata: MetadataArgument?
   @Option(help: "Rescan when the project's source folders change: on or off.")
@@ -399,7 +402,7 @@ struct ProjectSet: ParsableCommand {
       try CatalogConfiguration.setCompression(slug: slug, in: database) { compression in
         if let compress { compression.isEnabled = compress }
         if let longestEdge { compression.options.longestEdge = longestEdge.pixels }
-        if let quality { compression.options.quality = quality.value }
+        if let quality { compression.options.quality = quality }
         if let metadata { compression.options.removesMetadata = metadata == .removeMetadata }
       }
     }
@@ -428,11 +431,13 @@ struct LongestEdgeArgument: ExpressibleByArgument, Equatable {
   }
 }
 
-/// `--quality high|medium|small`.
-enum QualityArgument: String, ExpressibleByArgument, CaseIterable {
-  case high, medium, small
+/// `--quality 40…100`, or one of the old names `high`, `medium`, `small`.
+extension CompressionQuality: ExpressibleByArgument {
+  public init?(argument: String) {
+    self.init(parsing: argument)
+  }
 
-  var value: CompressionQuality { CompressionQuality(rawValue: rawValue)! }
+  public var defaultValueDescription: String { String(percent) }
 }
 
 /// `--remove-metadata` / `--keep-metadata`.

@@ -64,7 +64,10 @@ import Testing
     #expect(command.sample.count == nil && command.seed == 42 && command.format == .json)
     #expect(
       command.options
-        == CompressionOptions(longestEdge: nil, quality: .small, removesMetadata: false))
+        == CompressionOptions(longestEdge: nil, quality: 60, removesMetadata: false))
+    let percent = try parse(["--backend", "r2", "--dry-run", "--quality", "72"])
+    #expect(percent.options.quality == 72)
+    #expect(throws: (any Error).self) { try parse(["--backend", "r2", "--dry-run", "--quality", "30"]) }
     let sized = try parse(["--backend", "r2", "--dry-run", "--sample", "7", "--longest-edge", "900"])
     #expect(sized.sample.count == 7 && sized.options.longestEdge == 900)
   }
@@ -111,7 +114,8 @@ import Testing
     #expect(document["mode"] as? String == "dry_run")
     let options = try #require(document["options"] as? [String: Any])
     #expect(options["longest_edge"] is NSNull)
-    #expect(options["fingerprint"] as? String == "enone-qhigh-m1")
+    #expect(options["fingerprint"] as? String == "enone-q85-m1")
+    #expect(options["quality"] as? Int == 85)
     let sample = try #require(document["sample"] as? [String: Any])
     #expect(
       Set(sample.keys) == [

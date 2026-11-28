@@ -54,9 +54,7 @@ public struct UploadCompressionFacts: Equatable, Sendable {
     else { return nil }
     var options = CompressionOptions(longestEdge: nil)
     if let edge = record["longest_edge"] as? NSNumber { options.longestEdge = edge.intValue }
-    if let raw = record["quality"] as? String, let quality = CompressionQuality(rawValue: raw) {
-      options.quality = quality
-    }
+    if let quality = CompressionQuality(json: record["quality"]) { options.quality = quality }
     if let removes = record["remove_metadata"] as? Bool { options.removesMetadata = removes }
     self.init(
       options: options,
@@ -80,7 +78,7 @@ public struct UploadCompressionFacts: Equatable, Sendable {
       (try? JSONSerialization.jsonObject(with: Data(meta.utf8))) as? [String: Any] ?? [:]
     var record: [String: Any] = [
       "fingerprint": options.fingerprint,
-      "quality": options.quality.rawValue,
+      "quality": options.quality.percent,
       "remove_metadata": options.removesMetadata,
       "source_bytes": sourceByteSize,
       "source_mime": sourceMime,

@@ -188,13 +188,13 @@ import Testing
   @Test func leavesAScreenshotPNGThatWouldNotShrink() throws {
     let source = try F.png(F.screenshot(width: 1440, height: 900))
     #expect(ImageCompressor.compress(source, options: .default) == .skipped(.notSmaller))
-    let unresized = CompressionOptions(longestEdge: nil, quality: .small)
+    let unresized = CompressionOptions(longestEdge: nil, quality: 60)
     #expect(ImageCompressor.compress(source, options: unresized) == .skipped(.notSmaller))
   }
 
   @Test func leavesAJPEGThatWouldNotShrink() throws {
     let source = try F.jpeg(F.photo(width: 800, height: 600, noise: 10), quality: 0.5)
-    let options = CompressionOptions(longestEdge: nil, quality: .high)
+    let options = CompressionOptions(longestEdge: nil, quality: 85)
     #expect(ImageCompressor.compress(source, options: options) == .skipped(.notSmaller))
   }
 
@@ -239,12 +239,12 @@ import Testing
 
   @Test func qualityStepsGetSmallerInOrder() throws {
     let source = try photoJPEG()
-    let sizes = try CompressionQuality.allCases.map {
+    let sizes = try ([85, 75, 60] as [CompressionQuality]).map {
       try compressed(source, CompressionOptions(longestEdge: nil, quality: $0)).byteSize
     }
     #expect(sizes[0] > sizes[1])
     #expect(sizes[1] > sizes[2])
-    #expect(CompressionQuality.allCases.map(\.jpegQuality) == [0.85, 0.75, 0.6])
+    #expect(([85, 75, 60, 40, 100] as [CompressionQuality]).map(\.jpegQuality) == [0.85, 0.75, 0.6, 0.4, 1])
   }
 
   @Test func aCopyMustSaveTenPercent() {
@@ -261,16 +261,16 @@ import Testing
   // MARK: - Options
 
   @Test func fingerprintIsStable() {
-    #expect(CompressionOptions.default == CompressionOptions(longestEdge: 2048, quality: .high, removesMetadata: true))
-    #expect(CompressionOptions.default.fingerprint == "e2048-qhigh-m1")
+    #expect(CompressionOptions.default == CompressionOptions(longestEdge: 2048, quality: 85, removesMetadata: true))
+    #expect(CompressionOptions.default.fingerprint == "e2048-q85-m1")
     #expect(
-      CompressionOptions(longestEdge: nil, quality: .small, removesMetadata: false).fingerprint
-        == "enone-qsmall-m0")
-    #expect(CompressionOptions(longestEdge: 3840, quality: .medium).fingerprint == "e3840-qmedium-m1")
+      CompressionOptions(longestEdge: nil, quality: 60, removesMetadata: false).fingerprint
+        == "enone-q60-m0")
+    #expect(CompressionOptions(longestEdge: 3840, quality: 75).fingerprint == "e3840-q75-m1")
 
     var all = Set<String>()
     for edge in [1600, 2048, 2560, 3840, nil] as [Int?] {
-      for quality in CompressionQuality.allCases {
+      for quality in [85, 75, 60] as [CompressionQuality] {
         for removes in [true, false] {
           all.insert(
             CompressionOptions(longestEdge: edge, quality: quality, removesMetadata: removes)
@@ -279,5 +279,46 @@ import Testing
       }
     }
     #expect(all.count == 30)
+  }
+
+  @Test("A quality is a whole percentage from 40 to 100; the old names read as 85, 75 and 60")
+  func qualityPercentages() throws {
+    #expect(CompressionQuality.default.percent == 85)
+    #expect(CompressionOptions.default.quality == 85)
+    #expect(CompressionQuality.ticks == [60, 75, 85])
+    #expect(CompressionQuality(parsing: "high")?.percent == 85)
+    #expect(CompressionQuality(parsing: "Medium")?.percent == 75)
+    #expect(CompressionQuality(parsing: "small")?.percent == 60)
+    #expect(CompressionQuality(parsing: "40")?.percent == 40)
+    #expect(CompressionQuality(parsing: "100")?.percent == 100)
+    #expect(CompressionQuality(parsing: "39") == nil)
+    #expect(CompressionQuality(parsing: "101") == nil)
+    #expect(CompressionQuality(parsing: "85.5") == nil)
+    #expect(CompressionQuality(parsing: "huge") == nil)
+    #expect(CompressionQuality(json: NSNumber(value: 70))?.percent == 70)
+    #expect(CompressionQuality(json: NSNumber(value: 0.7)) == nil)
+    #expect(CompressionQuality(json: "small")?.percent == 60)
+    #expect(CompressionQuality(json: NSNumber(value: 20)) == nil)
+    #expect(CompressionQuality(5).percent == 40 && CompressionQuality(500).percent == 100)
+    #expect(CompressionQuality(85).description == "85%")
+
+    // Codable writes a number and reads a number or an old name.
+    #expect(String(decoding: try JSONEncoder().encode([CompressionQuality(70)]), as: UTF8.self) == "[70]")
+    let decoded = try JSONDecoder().decode([CompressionQuality].self, from: Data(#"[70, "high", "small"]"#.utf8))
+    #expect(decoded.map(\.percent) == [70, 85, 60])
+    #expect(throws: DecodingError.self) {
+      try JSONDecoder().decode([CompressionQuality].self, from: Data("[30]".utf8))
+    }
+  }
+
+  @Test("Fingerprints that name the old steps read as their percentage")
+  func legacyFingerprints() {
+    #expect(CompressionOptions.normalizedFingerprint("e2048-qhigh-m1") == "e2048-q85-m1")
+    #expect(CompressionOptions.normalizedFingerprint("enone-qmedium-m0") == "enone-q75-m0")
+    #expect(CompressionOptions.normalizedFingerprint("e3840-qsmall-m1") == "e3840-q60-m1")
+    #expect(CompressionOptions.normalizedFingerprint("e2048-q72-m1") == "e2048-q72-m1")
+    #expect(CompressionOptions.normalizedFingerprint("e2048-qhuge-m1") == "e2048-qhuge-m1")
+    #expect(
+      CompressionOptions.normalizedFingerprint("e2048-qhigh-m1") == CompressionOptions.default.fingerprint)
   }
 }

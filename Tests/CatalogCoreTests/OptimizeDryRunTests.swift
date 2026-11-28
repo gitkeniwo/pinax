@@ -217,7 +217,7 @@ import Testing
       try catalog.add("p/\(index)/full.jpg", data: Self.small + Data([UInt8(index)]))
       bucket.put("p/\(index)/full.jpg", Self.small + Data([UInt8(index)]))
     }
-    let options = CompressionOptions(longestEdge: nil, quality: .small, removesMetadata: false)
+    let options = CompressionOptions(longestEdge: nil, quality: 60, removesMetadata: false)
     let result = try await catalog.run(
       bucket, prefix: "p/", names: ["full.jpg"], options: options, sample: 3)
 
@@ -226,7 +226,7 @@ import Testing
     #expect(record.backendID == 1 && record.fromRunID == nil)
     let params = try JSONDecoder().decode(OptimizeRunParams.self, from: Data(record.params.utf8))
     #expect(params.backend == "r2" && params.prefix == "p/" && params.names == ["full.jpg"])
-    #expect(params.fingerprint == "enone-qsmall-m0" && params.keepMetadata)
+    #expect(params.fingerprint == "enone-q60-m0" && params.keepMetadata)
     #expect(params.sample == 3 && params.seed == nil)
     // With no seed given, the run's number is the seed.
     #expect(result.report.seed == UInt64(result.runID))

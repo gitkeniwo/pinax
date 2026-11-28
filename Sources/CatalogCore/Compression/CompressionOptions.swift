@@ -12,7 +12,7 @@ public struct CompressionOptions: Hashable, Codable, Sendable {
 
   public init(
     longestEdge: Int? = 2048,
-    quality: CompressionQuality = .high,
+    quality: CompressionQuality = .default,
     removesMetadata: Bool = true
   ) {
     self.longestEdge = longestEdge
@@ -22,11 +22,25 @@ public struct CompressionOptions: Hashable, Codable, Sendable {
 
   public static let `default` = CompressionOptions()
 
-  /// A short, stable string naming these options, such as `e2048-qhigh-m1`.
+  /// A short, stable string naming these options, such as `e2048-q85-m1`.
   /// Two uploads of the same source with the same fingerprint produce an
   /// equivalent copy, so the second can reuse the first.
   public var fingerprint: String {
     let edge = longestEdge.map { String($0) } ?? "none"
-    return "e\(edge)-q\(quality.rawValue)-m\(removesMetadata ? 1 : 0)"
+    return "e\(edge)-q\(quality.percent)-m\(removesMetadata ? 1 : 0)"
+  }
+
+  /// `fingerprint` as it would be written today. Earlier versions named
+  /// the quality (`e2048-qhigh-m1`); those names become their percentage,
+  /// so a copy made at the old high step matches one asked for at 85.
+  public static func normalizedFingerprint(_ fingerprint: String) -> String {
+    fingerprint.split(separator: "-", omittingEmptySubsequences: false)
+      .map { part -> String in
+        guard part.hasPrefix("q"),
+          let percent = CompressionQuality.legacyNames[String(part.dropFirst())]
+        else { return String(part) }
+        return "q\(percent)"
+      }
+      .joined(separator: "-")
   }
 }
