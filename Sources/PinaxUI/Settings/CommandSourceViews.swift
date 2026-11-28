@@ -44,8 +44,10 @@ struct CommandSourceEditor: View {
           .textFieldStyle(.roundedBorder)
           .onSubmit(apply)
       }
-      row("Command") {
-        TextField("Command", text: $fields.command)
+      // Grows with a long command; the label stays by its first line.
+      row("Command", alignment: .firstTextBaseline) {
+        TextField("Command", text: $fields.command, axis: .vertical)
+          .lineLimit(1...4)
           .labelsHidden()
           .textFieldStyle(.roundedBorder)
           .pinaxSettingsChip()
@@ -88,8 +90,11 @@ struct CommandSourceEditor: View {
     }
   }
 
-  private func row(_ title: String, @ViewBuilder content: () -> some View) -> some View {
-    HStack(spacing: Metrics.rowSpacing) {
+  private func row(
+    _ title: String, alignment: VerticalAlignment = .center,
+    @ViewBuilder content: () -> some View
+  ) -> some View {
+    HStack(alignment: alignment, spacing: Metrics.rowSpacing) {
       Text(title)
         .pinaxSettingsValue()
         .frame(width: Metrics.sourceFieldLabelWidth, alignment: .leading)
