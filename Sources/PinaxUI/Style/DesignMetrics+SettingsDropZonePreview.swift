@@ -51,4 +51,8 @@ extension DesignMetrics.settings {
   public static let previewLabelGap: CGFloat = 10
   public static let previewSegmentGap: CGFloat = 10
   public static let previewNoteGap: CGFloat = 6
+  /// Replay sits this far right of the segments, square at their height
+  /// (this until they are measured).
+  public static let previewReplayGap: CGFloat = 8
+  public static let previewReplayFallbackSide: CGFloat = 22
 }

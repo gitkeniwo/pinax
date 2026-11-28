@@ -14,6 +14,8 @@ struct DropZonePreviewColumn: View {
   var projects: [Project]
   @StateObject private var preview = DropZonePreviewController()
   @Environment(\.colorScheme) private var windowScheme
+  /// The segments' own height; Replay matches it.
+  @State private var segmentHeight: CGFloat = Metrics.previewReplayFallbackSide
 
   /// Upload into as the panel would start.
   private var projectSlug: String? {
@@ -54,14 +56,20 @@ struct DropZonePreviewColumn: View {
       Text(Geometry.sizeLabel(for: preferences.dropZoneSize))
         .pinaxSettingsPreviewLabel()
         .padding(.top, Metrics.previewLabelGap)
-      Picker("Preview", selection: stageBinding) {
-        ForEach(DropZonePreviewStage.allCases, id: \.self) { stage in
-          Text(stage.label).tag(stage)
+      HStack(spacing: Metrics.previewReplayGap) {
+        Picker("Preview", selection: stageBinding) {
+          ForEach(DropZonePreviewStage.allCases, id: \.self) { stage in
+            Text(stage.label).tag(stage)
+          }
+        }
+        .labelsHidden()
+        .pickerStyle(.segmented)
+        .fixedSize()
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { segmentHeight = $0 }
+        DropZoneReplayButton(side: segmentHeight, isEnabled: preview.canReplay) {
+          preview.replay(projects: projects, projectSlug: projectSlug)
         }
       }
-      .labelsHidden()
-      .pickerStyle(.segmented)
-      .fixedSize()
       .padding(.top, Metrics.previewSegmentGap)
       Text("Preview only")
         .pinaxSettingsPreviewNote()
@@ -94,6 +102,38 @@ struct DropZonePreviewColumn: View {
 
   private func show(_ stage: DropZonePreviewStage) {
     preview.show(stage, projects: projects, projectSlug: projectSlug)
+  }
+}
+
+/// Replay, right of the state segments: a borderless arrow, square at
+/// the segments' height, with the settings page's hover ground. Waits
+/// while a replay runs.
+struct DropZoneReplayButton: View {
+  let side: CGFloat
+  let isEnabled: Bool
+  let action: () -> Void
+  @State private var hovered = false
+  @Environment(\.colorScheme) private var scheme
+
+  var body: some View {
+    Button(action: action) {
+      Image(systemName: "arrow.counterclockwise")
+        .fontWeight(.bold)
+        .foregroundStyle(.secondary)
+        .frame(width: side, height: side)
+        .background {
+          if hovered && isEnabled {
+            RoundedRectangle(cornerRadius: Metrics.previewGripHoverRadius, style: .continuous)
+              .fill(DropZonePalette.of(scheme).buttonHover)
+          }
+        }
+        .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .disabled(!isEnabled)
+    .onHover { hovered = $0 }
+    .help("Replay")
+    .accessibilityLabel("Replay")
   }
 }
 

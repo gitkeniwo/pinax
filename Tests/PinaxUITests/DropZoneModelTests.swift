@@ -561,6 +561,8 @@ import Testing
 
     model.revealOnDemand()
     await waitUntil { controller.placementRecomputations >= 1 }
+    // The panel slides into place as it appears; read it once there.
+    await waitUntil { !controller.isAppearing }
 
     // Default placement: bottom-left of the main screen's visible frame.
     let visible = screen.visibleFrame

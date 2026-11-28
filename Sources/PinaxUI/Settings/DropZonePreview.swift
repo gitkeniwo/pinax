@@ -160,6 +160,58 @@ enum DropZonePreviewSamples {
     ]
   }
 
+  /// The replay's batch as it arrives: a photo whose copy is smaller, a
+  /// PNG sent as it was, and one the library already has.
+  static func replayCards(pictures: Pictures, projectSlug: String?) -> [DropZoneModel.UploadCard] {
+    [(Picture.forest, "IMG_2817.jpg"), (.map, "trail-map.png"), (.cover, "cover-2024.webp")]
+      .map { picture, filename in
+        DropZoneModel.UploadCard(
+          filename: filename, fileURL: pictures.urls[picture] ?? URL(fileURLWithPath: filename),
+          phase: .waiting, thumbnail: pictures.images[picture], projectSlug: projectSlug)
+      }
+  }
+
+  /// The replay's cards at `step`, the same cards (same identities) with
+  /// their phase moved on.
+  static func replay(
+    _ cards: [DropZoneModel.UploadCard], at step: DropZonePreviewController.ReplayStep, now: Date
+  ) -> [DropZoneModel.UploadCard] {
+    let copy = compression(from: 4_600_000, 6000, 4000, to: 336_000, 2048, 1365)
+    return cards.enumerated().map { index, card in
+      var card = card
+      switch step {
+      case .inserted:
+        card.phase = .waiting
+      case .compressing:
+        card.phase = .compressing
+      case .uploading:
+        card.phase = .uploading
+        card.compression = index == 0 ? copy : nil
+      case .done:
+        switch index {
+        case 0:
+          card.phase = .done(
+            outcome(
+              card.filename, mime: "image/jpeg", bytes: copy.byteSize, width: 2048,
+              height: 1365, deduplicated: false, now: now))
+          card.landedAt = now
+        case 1:
+          card.phase = .done(
+            outcome(
+              card.filename, mime: "image/png", bytes: 284_000, width: 1600, height: 1000,
+              deduplicated: false, now: now))
+          card.landedAt = now
+        default:
+          card.phase = .done(
+            outcome(
+              card.filename, mime: "image/webp", bytes: 96_000, width: 1200, height: 630,
+              deduplicated: true, now: now))
+        }
+      }
+      return card
+    }
+  }
+
   /// A JPEG (unless `sourceMime` says otherwise) recompressed with the
   /// default options.
   private static func compression(
@@ -388,6 +440,7 @@ final class DropZonePreviewController: ObservableObject {
   func show(
     _ stage: DropZonePreviewStage, projects: [Project], projectSlug: String?, now: Date = Date()
   ) {
+    stopReplay()
     self.stage = stage
     let pictures = self.pictures ?? DropZonePreviewSamples.pictures(in: directory)
     self.pictures = pictures
@@ -397,6 +450,90 @@ final class DropZonePreviewController: ObservableObject {
       draggedFileURLs: DropZonePreviewSamples.draggedFileURLs(for: stage, pictures: pictures),
       projects: projects, selectedProjectSlug: projectSlug)
     state.isDropTargeted = stage == .dragging
+  }
+
+  // MARK: Replay
+
+  /// The steps a replay walks through, in order.
+  enum ReplayStep: Equatable {
+    case inserted, compressing, uploading, done
+  }
+
+  /// A replay is running: the Replay button waits for it.
+  @Published private(set) var isReplaying = false
+  var canReplay: Bool { !isReplaying }
+  /// Each step as the replay reached it; for a test.
+  private(set) var replaySteps: [ReplayStep] = []
+  private var replayTask: Task<Void, Never>?
+  private var replayRun: UUID?
+  /// How a replay waits between steps; a test makes it immediate.
+  var replayPause: @MainActor (TimeInterval) async -> Void = { seconds in
+    try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+  }
+
+  /// Plays a batch on the Results state: three cards drop in, compress,
+  /// upload and finish — one copy smaller, one sent as it was, one already
+  /// in the library. Only the preview's cards change: nothing uploads or
+  /// copies. A replay already running is left to finish.
+  func replay(projects: [Project], projectSlug: String?) {
+    guard canReplay else { return }
+    replayTask = Task { [weak self] in
+      await self?.runReplay(projects: projects, projectSlug: projectSlug)
+    }
+  }
+
+  /// `replay`, awaited.
+  func runReplay(projects: [Project], projectSlug: String?) async {
+    guard canReplay else { return }
+    let run = UUID()
+    replayRun = run
+    isReplaying = true
+    replaySteps = []
+    stage = .results
+    state.isDropTargeted = false
+    let pictures = self.pictures ?? DropZonePreviewSamples.pictures(in: directory)
+    self.pictures = pictures
+    model.seedPreview(
+      cards: [], draggedFileURLs: [], projects: projects, selectedProjectSlug: projectSlug)
+    await replayPause(DropZonePanelMotion.replayLead)
+    var cards = DropZonePreviewSamples.replayCards(pictures: pictures, projectSlug: projectSlug)
+    for step in [ReplayStep.inserted, .compressing, .uploading, .done] {
+      guard replayRun == run, !Task.isCancelled else { return }
+      cards = DropZonePreviewSamples.replay(cards, at: step, now: Date())
+      seedReplay(cards)
+      replaySteps.append(step)
+      switch step {
+      case .inserted: await replayPause(DropZonePanelMotion.replayWaiting)
+      case .compressing: await replayPause(DropZonePanelMotion.replayCompressing)
+      case .uploading: await replayPause(DropZonePanelMotion.replayUploading)
+      case .done: break
+      }
+    }
+    guard replayRun == run else { return }
+    isReplaying = false
+    replayRun = nil
+    replayTask = nil
+  }
+
+  /// Choosing a state ends a replay where it is.
+  private func stopReplay() {
+    replayTask?.cancel()
+    replayTask = nil
+    replayRun = nil
+    isReplaying = false
+  }
+
+  /// The replay's cards into whatever project the preview names now
+  /// (Upload into may change while it plays).
+  private func seedReplay(_ cards: [DropZoneModel.UploadCard]) {
+    let slug = model.selectedProjectSlug
+    model.seedPreview(
+      cards: cards.map { card in
+        var card = card
+        card.projectSlug = slug
+        return card
+      },
+      draggedFileURLs: [], projects: model.projects, selectedProjectSlug: slug)
   }
 
   /// Upload into (or the projects) changed: the header and every card's

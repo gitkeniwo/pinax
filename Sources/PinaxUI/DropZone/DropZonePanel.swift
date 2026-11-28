@@ -76,6 +76,15 @@ public final class DropZoneController: ObservableObject {
   /// screen change — this counts the re-placement itself, which no assertion
   /// on "the corner setting was read" can stand in for.
   public private(set) var placementRecomputations = 0
+  /// Test seam: each show and hide of the window, and whether it animated.
+  private(set) var windowChanges: [DropZonePanelMotion.WindowChange] = []
+  /// Fading out: still on screen until the fade ends. A show meanwhile
+  /// bumps the generation so the fade's end leaves the panel up.
+  private var isHiding = false
+  /// Sliding in: the frame is on its way to where placement put it.
+  /// Test seam too — a frame read before this clears is mid-slide.
+  public private(set) var isAppearing = false
+  private var hideGeneration = 0
 
   public init(model: DropZoneModel, preferences: PreferencesStore) {
     self.model = model
@@ -155,10 +164,16 @@ public final class DropZoneController: ObservableObject {
       let screenID = screen?.displayID
       let crossedScreens =
         preferences.dropZoneFollowsCursor && screenID != nil && screenID != placedScreenID
+      if isHiding {
+        // Shown again while fading out: back to full, where it is.
+        hideGeneration += 1
+        isHiding = false
+        animateAlpha(of: panel, to: 1)
+      }
       if !panel.isVisible || crossedScreens {
         position(panel, on: screen)
         if !panel.isVisible {
-          panel.orderFrontRegardless()
+          appear(panel, corner: preferences.dropZoneCorner)
         }
       }
       let reviewing = model.isReviewing
@@ -166,10 +181,76 @@ public final class DropZoneController: ObservableObject {
       if reviewing, !wasReviewing { panel.makeKey() }
       wasReviewing = reviewing
     } else {
-      panel?.orderOut(nil)
+      if let panel, panel.isVisible, !isHiding { disappear(panel) }
       panel?.allowsBecomingKey = false
       wasReviewing = false
       placedScreenID = nil
+    }
+  }
+
+  /// Fades the panel in while it slides out of its corner into place;
+  /// at once under Reduce Motion.
+  private func appear(_ panel: DropZonePanel, corner: DropZoneCorner) {
+    let reduces = viewState.reducesMotion
+    guard !reduces else {
+      panel.alphaValue = 1
+      panel.orderFrontRegardless()
+      windowChanges.append(.appeared(animated: false))
+      return
+    }
+    let target = panel.frame.origin
+    let offset = DropZonePanelMotion.appearOffset(corner: corner)
+    panel.alphaValue = 0
+    panel.setFrameOrigin(NSPoint(x: target.x + offset.dx, y: target.y + offset.dy))
+    panel.orderFrontRegardless()
+    isAppearing = true
+    NSAnimationContext.runAnimationGroup { context in
+      context.duration = DropZonePanelMotion.appearDuration
+      context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+      panel.animator().alphaValue = 1
+      panel.animator().setFrameOrigin(target)
+    } completionHandler: { [weak self] in
+      MainActor.assumeIsolated { self?.isAppearing = false }
+    }
+    windowChanges.append(.appeared(animated: true))
+  }
+
+  /// Fades the panel out, then orders it out — unless it was asked back
+  /// meanwhile; at once under Reduce Motion.
+  private func disappear(_ panel: DropZonePanel) {
+    guard !viewState.reducesMotion else {
+      panel.orderOut(nil)
+      panel.alphaValue = 1
+      windowChanges.append(.disappeared(animated: false))
+      return
+    }
+    isHiding = true
+    hideGeneration += 1
+    let generation = hideGeneration
+    NSAnimationContext.runAnimationGroup { context in
+      context.duration = DropZonePanelMotion.disappearDuration
+      context.timingFunction = CAMediaTimingFunction(name: .easeIn)
+      panel.animator().alphaValue = 0
+    } completionHandler: { [weak self, weak panel] in
+      MainActor.assumeIsolated {
+        guard let self, let panel, self.hideGeneration == generation else { return }
+        self.isHiding = false
+        panel.orderOut(nil)
+        panel.alphaValue = 1
+      }
+    }
+    windowChanges.append(.disappeared(animated: true))
+  }
+
+  private func animateAlpha(of panel: DropZonePanel, to alpha: CGFloat) {
+    guard !viewState.reducesMotion else {
+      panel.alphaValue = alpha
+      return
+    }
+    NSAnimationContext.runAnimationGroup { context in
+      context.duration = DropZonePanelMotion.appearDuration
+      context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+      panel.animator().alphaValue = alpha
     }
   }
 
@@ -233,11 +314,20 @@ public final class DropZoneController: ObservableObject {
 
   private func position(_ panel: DropZonePanel, on screen: NSScreen?) {
     guard let visibleFrame = screen?.visibleFrame else { return }
-    panel.setFrameOrigin(
-      DropZonePlacement.origin(
-        corner: preferences.dropZoneCorner,
-        panelSize: panel.frame.size,
-        visibleFrame: visibleFrame))
+    let origin = DropZonePlacement.origin(
+      corner: preferences.dropZoneCorner,
+      panelSize: panel.frame.size,
+      visibleFrame: visibleFrame)
+    if isAppearing {
+      // Through the animator, so the slide still under way cannot carry
+      // the panel back to where it was headed.
+      NSAnimationContext.runAnimationGroup { context in
+        context.duration = 0
+        panel.animator().setFrameOrigin(origin)
+      }
+    } else {
+      panel.setFrameOrigin(origin)
+    }
     placedScreenID = screen?.displayID
     placementRecomputations += 1
   }
