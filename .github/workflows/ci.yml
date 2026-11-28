@@ -25,8 +25,7 @@ jobs:
           path: .build
           key: spm-${{ runner.os }}-${{ hashFiles('Package.resolved') }}
       # The UI tests need a different macOS version and run in `ui-tests`
-      # below without gating anything. FocusSerial tests need a focused window
-      # and run locally only.
+      # below. FocusSerial tests need a focused window and run locally only.
       - run: swift test --skip PinaxUITests --skip FocusSerial
 
   # The UI tests assert AppKit and SwiftUI layout as macOS 15 draws it:
@@ -37,7 +36,6 @@ jobs:
   ui-tests:
     runs-on: macos-15
     timeout-minutes: 60
-    continue-on-error: true
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
     steps:
