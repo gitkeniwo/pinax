@@ -63,8 +63,15 @@ enum DropZonePanelMotion {
       .delay(Double(min(max(index, 0), staggeredCards)) * cardStagger)
   }
 
-  /// The cards below moving down to make room, and a card leaving.
+  /// The cards below moving down to make room.
   static func cardShift(reducesMotion: Bool) -> Animation? {
+    reducesMotion ? nil : .spring(response: cardResponse, dampingFraction: cardDamping)
+  }
+
+  /// A card leaving (Cancel in review, a deleted image's card), and the
+  /// list giving way to the empty state when the last one goes. Carried by
+  /// the removal itself, so it fades whatever else changes with it.
+  static func cardRemoval(reducesMotion: Bool) -> Animation? {
     reducesMotion ? nil : .spring(response: cardResponse, dampingFraction: cardDamping)
   }
 
@@ -81,7 +88,7 @@ enum DropZonePanelMotion {
     .asymmetric(
       insertion: .offset(y: -cardDrop).combined(with: .opacity)
         .animation(cardInsertion(index: index, reducesMotion: reducesMotion)),
-      removal: .opacity)
+      removal: .opacity.animation(cardRemoval(reducesMotion: reducesMotion)))
   }
 
   static var reviewBarTransition: AnyTransition {
@@ -105,6 +112,7 @@ enum DropZonePanelMotion {
   struct Report: Equatable {
     var dragFades: Bool
     var cardsSlideIn: Bool
+    var cardsFadeOut: Bool
     var statusFades: Bool
     var reviewBarSlides: Bool
   }

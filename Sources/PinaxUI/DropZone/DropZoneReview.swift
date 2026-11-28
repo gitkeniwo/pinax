@@ -33,6 +33,8 @@ struct DropZoneReviewSwitch: View {
           set: { model.setCompresses(card.id, $0) })
       )
       .toggleStyle(.switch)
+      // On in the app's teal, as the settings' switches.
+      .tint(PinaxPalette.accentFill)
       .controlSize(.mini)
       .labelsHidden()
       if showsLabel {

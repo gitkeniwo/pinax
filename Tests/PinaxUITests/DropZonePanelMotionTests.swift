@@ -24,6 +24,7 @@ import Testing
       #expect((M.disappear(reducesMotion: reduces) == nil) == reduces)
       #expect((M.drag(reducesMotion: reduces) == nil) == reduces)
       #expect((M.cardShift(reducesMotion: reduces) == nil) == reduces)
+      #expect((M.cardRemoval(reducesMotion: reduces) == nil) == reduces)
       #expect((M.status(reducesMotion: reduces) == nil) == reduces)
       for showing in [false, true] {
         #expect((M.reviewBar(showing: showing, reducesMotion: reduces) == nil) == reduces)
@@ -53,8 +54,38 @@ import Testing
       let report = try #require(state.panelMotion)
       #expect(report.dragFades == !reduces, "\(report)")
       #expect(report.cardsSlideIn == !reduces, "\(report)")
+      #expect(report.cardsFadeOut == !reduces, "\(report)")
       #expect(report.statusFades == !reduces, "\(report)")
       #expect(report.reviewBarSlides == !reduces, "\(report)")
+    }
+  }
+
+  @Test("Cancel in review: the cards fade out and the empty state fades back; at once under Reduce Motion")
+  func cancelFadesCardsOut() async throws {
+    for reduces in [false, true] {
+      let thumbnails = ThumbnailCache(
+        cacheDirectory: FileManager.default.temporaryDirectory
+          .appendingPathComponent("pinaxui-motion-\(UUID().uuidString)", isDirectory: true),
+        fetcher: { _ in throw URLError(.unsupportedURL) })
+      let service = MotionSpyService()
+      let model = DropZoneModel(service: service, thumbnails: thumbnails)
+      model.copiesURLsAutomatically = false
+      let state = DropZoneViewState()
+      state.reducesMotion = reduces
+      let window = host(DropZoneView(model: model, state: state))
+      defer { window.orderOut(nil) }
+      model.drop(
+        fileURLs: ["a.jpg", "b.png"].map { URL(fileURLWithPath: "/pinax-dz-motion/\($0)") },
+        modifiers: [.shift])
+      await spin { model.cards.count == 2 && model.cards.allSatisfy(\.phase.isReview) }
+      #expect(model.isReviewing)
+
+      model.cancelReview()
+      await spin { state.layoutFrames[DropZoneLayoutKey.Part(card: nil, role: .reviewBar)] == nil }
+      #expect(model.cards.isEmpty)
+      #expect(service.uploads == 0)
+      let report = try #require(state.panelMotion)
+      #expect(report.cardsFadeOut == !reduces, "\(report)")
     }
   }
 

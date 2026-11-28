@@ -168,7 +168,8 @@ struct ExternalMigrationSheet: View {
   }
 
   /// Compress images: a checkbox that starts as the target project says.
-  /// Projects that disagree show it mixed until it is clicked.
+  /// Projects that disagree show it mixed until it is clicked. In a card
+  /// of its own, the box where the other cards' rows start.
   private var compressRow: some View {
     Toggle(
       sources: Binding(get: { model.migrationCompression }, set: { model.migrationCompression = $0 }),
@@ -181,6 +182,11 @@ struct ExternalMigrationSheet: View {
       }
     }
     .toggleStyle(.checkbox)
+    .tint(PinaxPalette.accentFill)
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .padding(.horizontal, Self.rowInset)
+    .padding(.vertical, DesignMetrics.spacing.s)
+    .migrationCard()
   }
 
   private func sourceRow(_ source: ExternalMigrationConfirmation.Source) -> some View {

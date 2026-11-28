@@ -45,9 +45,14 @@ public struct DropZoneView: View {
     DropZonePanelMotion.Report(
       dragFades: motion.drag(reducesMotion: reducesMotion) != nil,
       cardsSlideIn: motion.cardInsertion(index: 0, reducesMotion: reducesMotion) != nil,
+      cardsFadeOut: cardsClear != nil,
       statusFades: motion.status(reducesMotion: reducesMotion) != nil,
       reviewBarSlides: motion.reviewBar(showing: true, reducesMotion: reducesMotion) != nil)
   }
+
+  /// The list going and the empty state coming back when the last card
+  /// leaves (Cancel in review), which no other change animates.
+  private var cardsClear: Animation? { motion.cardRemoval(reducesMotion: reducesMotion) }
 
   public var body: some View {
     ZStack(alignment: .top) {
@@ -59,6 +64,9 @@ public struct DropZoneView: View {
     }
     // A drag entering or leaving: blur, saturation, fade and scrim together.
     .animation(motion.drag(reducesMotion: reducesMotion), value: state.isDropTargeted)
+    // Outside the drag's, so a drop that fills an empty panel keeps the
+    // drag's timing; only the last card leaving takes this one.
+    .animation(cardsClear, value: model.cards.isEmpty)
     .foregroundStyle(palette.primary)
     .tint(palette.accent)
     // Settings ▸ Size: the panel sets the size; the root fills it.
