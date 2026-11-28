@@ -65,6 +65,7 @@ import Testing
   private func controlStates(in view: Any, enabled: Bool = true) -> [String: Bool] {
     let name = String(describing: type(of: view))
     if let row = view as? SettingsRowSwitch { return ["switch " + row.title: enabled] }
+    if let slider = view as? SettingsQualitySlider { return ["slider " + slider.title: enabled] }
     if name.hasPrefix("SettingsMenuPicker") {
       let title = Mirror(reflecting: view).children.first { $0.label == "title" }?.value as? String
       return ["menu " + (title ?? "?"): enabled]
@@ -94,18 +95,18 @@ import Testing
 
   // MARK: - Settings ▸ Projects
 
-  @Test("A project with nothing stored shows compression off, 2048 px, High, metadata removed")
+  @Test("A project with nothing stored shows compression off, 2048 px, 85%, metadata removed")
   func defaults() throws {
     let (_, make) = try section(MemoryStore())
     let section = try make()
     #expect(!section.isEnabled.wrappedValue)
     #expect(section.longestEdge.wrappedValue == 2048)
-    #expect(section.quality.wrappedValue == .high)
+    #expect(section.quality.wrappedValue == 85)
     #expect(section.removesMetadata.wrappedValue)
     #expect(ProjectCompressionSection.longestEdgeLabel(2048) == "2048 px")
     #expect(ProjectCompressionSection.longestEdgeLabel(nil) == "Don't resize")
     #expect(ProjectCompressionSection.longestEdges == [1600, 2048, 2560, 3840])
-    #expect(CompressionQuality.allCases.map(ProjectCompressionSection.qualityLabel) == ["High", "Medium", "Small"])
+    #expect(([85, 75, 60, 100] as [CompressionQuality]).map(ProjectCompressionSection.qualityLabel) == ["85%", "75%", "60%", "100%"])
     #expect(ProjectCompressionSection.metadataNote == "Includes location.")
   }
 
@@ -116,7 +117,7 @@ import Testing
     let off = controlStates(in: try make().body)
     #expect(
       off == [
-        "switch Compress on upload": true, "menu Longest edge": false, "menu Quality": false,
+        "switch Compress on upload": true, "menu Longest edge": false, "slider Quality": false,
         "switch Remove metadata": false,
       ], "\(off)")
 
@@ -131,10 +132,10 @@ import Testing
     let (model, make) = try section(store)
     try make().isEnabled.wrappedValue = true
     try make().longestEdge.wrappedValue = nil
-    try make().quality.wrappedValue = .small
+    try make().quality.wrappedValue = 60
     try make().removesMetadata.wrappedValue = false
     let expected = ProjectCompression(
-      isEnabled: true, options: CompressionOptions(longestEdge: nil, quality: .small, removesMetadata: false))
+      isEnabled: true, options: CompressionOptions(longestEdge: nil, quality: 60, removesMetadata: false))
     #expect(store.writes.count == 4)
     #expect(store.writes.last == expected)
     #expect(store.writes.first == ProjectCompression(isEnabled: true))
@@ -142,6 +143,27 @@ import Testing
     // Off keeps the values for next time.
     try make().isEnabled.wrappedValue = false
     #expect(store.writes.last?.options == expected.options)
+  }
+
+  @Test("The quality slider spans 40 to 100, ticks the old steps and rounds to a whole percent")
+  func qualitySlider() throws {
+    #expect(SettingsQualitySlider.bounds == 40...100)
+    #expect(SettingsQualitySlider.quality(forSliderValue: 72.4) == 72)
+    #expect(SettingsQualitySlider.quality(forSliderValue: 72.6) == 73)
+    #expect(SettingsQualitySlider.quality(forSliderValue: 12) == 40)
+    let width = DesignMetrics.settings.qualitySliderWidth
+    let inset = DesignMetrics.settings.qualityTickInset
+    #expect(SettingsQualitySlider.tickOffset(40, width: width) == inset)
+    #expect(SettingsQualitySlider.tickOffset(100, width: width) == width - inset)
+    let offsets = CompressionQuality.ticks.map { SettingsQualitySlider.tickOffset($0, width: width) }
+    #expect(offsets == offsets.sorted() && Set(offsets).count == 3)
+
+    // The row's slider writes through the section's binding.
+    let store = MemoryStore(compression: ProjectCompression(isEnabled: true))
+    let (_, make) = try section(store)
+    try make().quality.wrappedValue = 72
+    #expect(store.writes.last?.options.quality == 72)
+    #expect(try make().quality.wrappedValue == 72)
   }
 
   @Test("A longest edge set elsewhere is offered and marked in the menu")
@@ -163,11 +185,11 @@ import Testing
     #expect(model.snapshot?.rows.first { $0.slug == "blog" }?.compression == ProjectCompression())
     model.setCompression(forProject: "blog") {
       $0.isEnabled = true
-      $0.options.quality = .medium
+      $0.options.quality = 75
     }
     #expect(model.saveError == nil)
     let stored = try CatalogConfiguration.projectSettings(slug: "blog", in: database).compression
-    #expect(stored == ProjectCompression(isEnabled: true, options: CompressionOptions(longestEdge: 2048, quality: .medium, removesMetadata: true)))
+    #expect(stored == ProjectCompression(isEnabled: true, options: CompressionOptions(longestEdge: 2048, quality: 75, removesMetadata: true)))
     #expect(model.snapshot?.rows.first { $0.slug == "blog" }?.compression == stored)
     #expect(try CatalogConfiguration.projectSettings(slug: "notes", in: database).compression == ProjectCompression())
   }

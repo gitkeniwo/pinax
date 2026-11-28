@@ -207,11 +207,11 @@ import Testing
   @Test("The tooltip names the longest edge, the quality and what happened to metadata")
   func settingsTooltip() {
     #expect(
-      Self.compression().settingsSummary == "Longest edge 2048 · High · metadata removed")
+      Self.compression().settingsSummary == "Longest edge 2048 · Quality 85% · metadata removed")
     #expect(
       Self.compression(
-        options: CompressionOptions(longestEdge: nil, quality: .small, removesMetadata: false)
-      ).settingsSummary == "Not resized · Small · metadata kept")
+        options: CompressionOptions(longestEdge: nil, quality: 60, removesMetadata: false)
+      ).settingsSummary == "Not resized · Quality 60% · metadata kept")
   }
 
   @Test("The synthetic init takes the sizes; without them there are none")

@@ -30,7 +30,7 @@ struct OptimizeCommand: AsyncParsableCommand {
   @Option(help: "The longest edge of a copy in pixels, or none to keep the size.")
   var longestEdge = LongestEdge(pixels: CompressionOptions.default.longestEdge)
 
-  @Option(help: "high, medium or small.")
+  @Option(help: "40 to 100; high, medium and small read as 85, 75 and 60.")
   var quality = CompressionOptions.default.quality
 
   @Flag(help: "Keep EXIF, location and other metadata in a copy.")
@@ -135,8 +135,6 @@ struct LongestEdge: ExpressibleByArgument, Equatable {
   var defaultValueDescription: String { pixels.map(String.init) ?? "none" }
 }
 
-extension CompressionQuality: ExpressibleByArgument {}
-
 // MARK: - Table
 
 enum OptimizeTable {
@@ -236,7 +234,7 @@ struct OptimizeDocument: Encodable {
     let fingerprint: String
     /// Null keeps the size.
     @ExplicitNull var longestEdge: Int?
-    let quality: String
+    let quality: Int
     let keepMetadata: Bool
 
     enum CodingKeys: String, CodingKey {
@@ -310,7 +308,7 @@ struct OptimizeDocument: Encodable {
     names = params.names
     options = Options(
       fingerprint: params.fingerprint, longestEdge: params.longestEdge,
-      quality: params.quality.rawValue, keepMetadata: params.keepMetadata)
+      quality: params.quality.percent, keepMetadata: params.keepMetadata)
     seed = report.seed
     selection = report.selection
     sample = Sample(
