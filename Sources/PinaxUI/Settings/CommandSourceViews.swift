@@ -53,10 +53,7 @@ struct CommandSourceEditor: View {
           .onSubmit(apply)
       }
       row("Run in") {
-        Text(verbatim: SourceRowView.shortPath(fields.workingDirectory))
-          .lineLimit(1)
-          .truncationMode(.middle)
-          .help(fields.workingDirectory)
+        runDirectory
           .frame(maxWidth: .infinity, alignment: .leading)
         Button("Choose…", action: chooseDirectory)
           .controlSize(.small)
@@ -74,6 +71,21 @@ struct CommandSourceEditor: View {
     .padding(.vertical, Metrics.rowVerticalPadding)
     .padding(.horizontal, Metrics.rowHorizontalPadding)
     .onAppear { if isNew { commandFocused = true } }
+  }
+
+  /// Run in before a folder is chosen; Set waits for one.
+  static let noRunDirectory = "Not set"
+
+  @ViewBuilder private var runDirectory: some View {
+    if fields.workingDirectory.isEmpty {
+      Text(Self.noRunDirectory)
+        .foregroundStyle(.secondary)
+    } else {
+      Text(verbatim: SourceRowView.shortPath(fields.workingDirectory))
+        .lineLimit(1)
+        .truncationMode(.middle)
+        .help(fields.workingDirectory)
+    }
   }
 
   private func row(_ title: String, @ViewBuilder content: () -> some View) -> some View {
@@ -110,7 +122,7 @@ struct CommandSourceEditor: View {
 }
 
 /// Beside Test Run: a spinner while it runs, then the references and the time
-/// it took, or the failure on one line with all of it as the help.
+/// it took, or the failure on up to two lines with all of it as the help.
 struct CommandTestResult: View {
   let test: CommandTest?
 
@@ -129,14 +141,22 @@ struct CommandTestResult: View {
           Text(verbatim: text)
             .pinaxSettingsRowSubtitle()
             .monospacedDigit()
-            .lineLimit(1)
+            .lineLimit(Self.lineLimit(test))
             .truncationMode(.tail)
-            .help(Self.help(test))
+            // Wraps to its limit instead of being cut to the row's height.
+            .fixedSize(horizontal: false, vertical: true)
         }
       }
+      .contentShape(Rectangle())
+      .help(Self.help(test))
     } else {
       Color.clear.frame(height: 0)
     }
+  }
+
+  static func lineLimit(_ test: CommandTest) -> Int {
+    if case .failed = test.outcome { return 2 }
+    return 1
   }
 
   static func help(_ test: CommandTest) -> String {

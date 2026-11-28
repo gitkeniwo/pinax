@@ -139,6 +139,9 @@ struct SourceRowView: View {
   let select: () -> Void
   let locate: () -> Void
 
+  /// A command row's second line before there is a command.
+  static let noCommand = "No command"
+
   static func symbol(for kind: ProjectSource.Kind) -> String {
     kind == .command ? "terminal.fill" : "folder.fill"
   }
@@ -209,11 +212,16 @@ struct SourceRowView: View {
         .pinaxSettingsRowSubtitle()
         .truncationMode(.middle)
     case .command:
-      // A new command's line is empty but keeps its height.
-      Text(verbatim: source.command.isEmpty ? " " : source.command)
-        .pinaxSettingsChip()
-        .foregroundStyle(.secondary)
-        .truncationMode(.tail)
+      if source.command.isEmpty {
+        // In the folder row's style, so a new command's row is as tall.
+        Text(Self.noCommand)
+          .pinaxSettingsRowSubtitle()
+      } else {
+        Text(verbatim: source.command)
+          .pinaxSettingsChip()
+          .foregroundStyle(.secondary)
+          .truncationMode(.tail)
+      }
     }
   }
 

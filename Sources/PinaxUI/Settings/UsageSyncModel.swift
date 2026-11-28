@@ -42,8 +42,34 @@ public struct CommandTest: Equatable, Sendable {
   public enum Outcome: Equatable, Sendable {
     case running
     case succeeded(references: Int, seconds: TimeInterval)
-    /// `line` is the one line drawn; `detail` is all of it.
+    /// `line` is what is drawn; `detail` is all of it.
     case failed(line: String, detail: String)
+  }
+
+  /// A command's failure beside its own Test Run, which does not need the
+  /// error to name the source.
+  public static func failure(_ error: CommandSourceError) -> Outcome {
+    let line: String
+    switch error {
+    case .commandNotAllowed:
+      line = "The command has not been allowed to run."
+    case let .workingDirectoryNotFound(_, path):
+      line = "Working directory not found: \(path)"
+    case let .commandFailed(_, status, stderrTail):
+      // The last line a failing command printed usually says why.
+      let head = "Exited with status \(status)"
+      let last = stderrTail.split(whereSeparator: \.isNewline).last.map(String.init)
+      return .failed(
+        line: last.map { "\(head): \($0)" } ?? head,
+        detail: stderrTail.isEmpty ? head : "\(head)\n\(stderrTail)")
+    case let .commandTimedOut(_, seconds):
+      line = "Did not finish within \(String(format: "%g", seconds)) seconds."
+    case .commandOutputTooLarge:
+      line = "Printed too much output."
+    case let .commandOutputInvalid(_, field):
+      line = "Output is invalid at '\(field)'."
+    }
+    return .failed(line: line, detail: line)
   }
 
   /// The source as it ran: a result no longer stands once it is edited.
@@ -452,13 +478,8 @@ public final class UsageSyncModel: ObservableObject {
       outcome = .succeeded(
         references: references,
         seconds: Double(elapsed.seconds) + Double(elapsed.attoseconds) * 1e-18)
-    } catch let CommandSourceError.commandFailed(_, status, stderrTail) {
-      // The last line a failing command printed usually says why.
-      let last = stderrTail.split(whereSeparator: \.isNewline).last.map(String.init)
-      let head = "Exited with status \(status)"
-      outcome = .failed(
-        line: last.map { "\(head): \($0)" } ?? head,
-        detail: stderrTail.isEmpty ? head : "\(head)\n\(stderrTail)")
+    } catch let error as CommandSourceError {
+      outcome = CommandTest.failure(error)
     } catch {
       let text = message(for: error)
       outcome = .failed(line: text, detail: text)
